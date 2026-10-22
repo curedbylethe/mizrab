@@ -1,0 +1,114 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+import conv
+import math
+import os
+import sync
+
+// The miniaudio and shim objects built by `make spike-build`. The compiler
+// checks these paths relative to this file, then passes the strings to the
+// linker from its working directory, so `make spike-build` builds from spike/
+// to satisfy both.
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+extern:
+    func mizrab_ma_create(fill: void *, rate: u32, channels: u32, null_backend: int): void *
+    func mizrab_ma_start(dev: void *): int
+    func mizrab_ma_stop(dev: void *): int
+    func mizrab_ma_destroy(dev: void *)
+    func mizrab_ma_last_error(): str
+    func mizrab_ma_backend_name(dev: void *): str
+end
+
+// Called from miniaudio's audio thread, so this function may not call any
+// ma_device_* lifecycle entry point: the manual states it deadlocks. The
+// counters it writes race with main's reads by design; a lock-free mailbox is
+// CUR-503's job, not this spike's.
+mut g_phase := 0.0
+mut g_frames := 0 as u64
+mut g_rate := 48000 as u32
+mut g_channels := 2 as u32
+
+export:
+    func mizrab_tone_fill(_dev: void *, out: void *, _inp: void *, frames: u32):
+        samples := out as f32 *
+        step := math.TAU * 440.0 / (g_rate as f64)
+        mut i := 0
+        until i < (frames as int):
+            sample := (math.Sin(g_phase) * 0.2) as f32
+            mut c := 0
+            until c < (g_channels as int):
+                samples[(i * (g_channels as int) + c) as i64] = sample
+                c = c + 1
+            end
+            g_phase = g_phase + step
+            if g_phase >= math.TAU:
+                g_phase = g_phase - math.TAU
+            end
+            i = i + 1
+        end
+        g_frames = g_frames + (frames as u64)
+    end
+end
+
+func main:
+    mut null_backend := 0
+    args := os.Args()
+    mut i := 1
+    until i < args.len():
+        if args.get(i) == "--null":
+            null_backend = 1
+        end
+        i = i + 1
+    end
+
+    g_rate = 48000
+    g_channels = 2
+
+    dev := mizrab_ma_create(mizrab_tone_fill as void *, g_rate, g_channels, null_backend)
+    if dev == null:
+        println "mizrab_ma_last_error: " + mizrab_ma_last_error()
+        ret 1
+    end
+
+    if mizrab_ma_start(dev) != 0:
+        println "mizrab_ma_last_error: " + mizrab_ma_last_error()
+        mizrab_ma_destroy(dev)
+        ret 1
+    end
+
+    sync.SleepMs(2000)
+
+    // Read the backend while the device is still alive: it reports which
+    // backend actually opened, not which one was requested.
+    backend := mizrab_ma_backend_name(dev)
+
+    mizrab_ma_stop(dev)
+    mizrab_ma_destroy(dev)
+
+    println "frames=" + conv.FormatUint(g_frames) + " backend=" + backend
+    if g_frames > 0:
+        ret 0
+    end
+    ret 1
+end
