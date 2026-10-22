@@ -8,6 +8,8 @@ ENTRY := main.salam
 SOURCES := main.salam commands
 FLAGS := --log-level=warn --backend=llvm
 SALAM_VERSION := $(shell cat .salam-version)
+MINT ?= mint
+MINT_VERSION := $(shell cat .mint-version)
 
 # Vendored miniaudio (audio/). One implementation unit; the null backend stays
 # compiled in, so no OS-conditional backend set is needed.
@@ -25,7 +27,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test fmt fmt-check clean spike-build spike-run spike-check spike-check-device spike-measure
+.PHONY: help build run test fmt fmt-check clean docs docs-check docs-format-check spike-build spike-run spike-check spike-check-device spike-measure
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
@@ -34,6 +36,9 @@ help:
 	@echo "make fmt       format all Salam sources in place"
 	@echo "make fmt-check fail if any Salam source would be rewritten"
 	@echo "make clean     remove build output"
+	@echo "make docs      serve the site locally with mint $(MINT_VERSION) (pinned in .mint-version)"
+	@echo "make docs-check validate docs.json and check internal links and anchors"
+	@echo "make docs-format-check fail if mint format would rewrite a page (stage edits first)"
 	@echo "make spike-build compile $(MINIAUDIO_OBJ), $(SHIM_OBJ) and spike/tone.salam into $(BUILD)/spike"
 	@echo "make spike-run   build and run the tone spike on the default device"
 	@echo "make spike-check build and run the tone spike on the null backend"
@@ -56,6 +61,17 @@ fmt:
 
 fmt-check:
 	$(SALAM) format --check $(SOURCES)
+
+docs:
+	$(MINT) dev
+
+docs-check:
+	$(MINT) validate
+	$(MINT) broken-links --check-anchors
+
+docs-format-check:
+	$(MINT) format
+	git diff --exit-code -- '*.mdx' 'docs.json'
 
 clean:
 	rm -rf $(BUILD) .salam-build
