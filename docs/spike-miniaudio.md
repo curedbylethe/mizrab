@@ -32,8 +32,8 @@ paths are told apart by a log line.
 
 The cost is one 365,464-byte object, a 1.70–2.31 s cold compile, a 331,480-byte
 binary, and a median fill time of 0.009–0.013 ms against a ~10 ms callback
-period. The limits: no audible output has been confirmed on any platform, and
-the Linux leg has not run yet.
+period. `make spike-run` was heard on macOS; the limit is that the Linux leg has
+not run yet.
 
 ## What worked
 
@@ -203,8 +203,8 @@ non-null on every callback: 215/215, 217/217, 215/215 and 215/215 across the fou
 runs, and freed cleanly. Median execution was unchanged at 0.009–0.011 ms
 (1.00x the baseline pass on three runs, 0.85x on the fourth, i.e. noise), and
 max execution was 0.020–0.036 ms against the ~10 ms period. On that budget there
-was no dropout. Audibility was never confirmed by ear — the transcript's
-"dropout budget true" is arithmetic, not listening.
+was no dropout. The allocation mode itself was not listened to; the plain tone
+was, separately, and was audible.
 
 All four runs agreed on the outcome: allocation always succeeded and the median
 did not move. The ratio between the baseline and allocation medians ranged from
@@ -295,8 +295,8 @@ sequence. Throw away `spike/measure.salam`, `spike/measure.sh` and
 - **Linux audible output.** Not verified. The Linux CI step opens the ALSA null
   plugin, which produces no sound by construction, and it has not run yet. No
   Linux host was available for this spike.
-- **Audibility anywhere.** No run was checked by ear on macOS either. The tone
-  path is confirmed by frame counts, not listening.
+- **Linux at all.** Only macOS was run. The Linux leg of CI is written, not
+  observed.
 - **Windows.** Neither WASAPI nor any Windows build was attempted; the shim's
   `#include <time.h>` and `clock_gettime` are POSIX-only.
 - **Non-Core Audio backends.** ALSA, PulseAudio, JACK and sndio are compiled in
