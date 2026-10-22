@@ -1,0 +1,3 @@
+[submodule "vendor/basalam"]
+	path = vendor/basalam
+	url = https://github.com/curedbylethe/basalam
