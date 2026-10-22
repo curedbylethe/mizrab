@@ -68,3 +68,34 @@ jobs:
       - name: make spike-check
         if: runner.os == 'macOS'
         run: make spike-check
+
+  docs:
+    runs-on: ubuntu-latest
+    env:
+      MINTLIFY_TELEMETRY_DISABLED: 1
+    steps:
+      # No submodules: the docs job validates the site only, not the library.
+      - uses: actions/checkout@v4
+
+      # The CLI version is read from .mint-version, not repeated here: one
+      # source for the pin, so CI cannot drift from the Makefile.
+      - name: Read the Mintlify pin
+        id: mint
+        run: echo "version=$(cat .mint-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Mintlify CLI
+        run: npm i -g "mint@${{ steps.mint.outputs.version }}"
+
+      # The formatter must be idempotent: checkout is clean, so any rewrite
+      # fails the gate; locally the same target needs the edits staged.
+      - name: Check the docs format
+        run: make docs-format-check
+
+      # MDX and frontmatter validation, then the link and anchor check.
+      - name: Check the docs
+        run: make docs-check
