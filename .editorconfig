@@ -1,0 +1,22 @@
+# EditorConfig: https://editorconfig.org
+# `salam format` is the authority for .salam files; these settings match it
+# (4-space indentation) so editors agree with the formatter before it runs.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,mdx,json,yml,yaml}]
+indent_size = 2
+
+# Mintlify writes indentation on blank lines inside fenced code blocks.
+[*.mdx]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
