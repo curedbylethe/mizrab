@@ -1,0 +1,27 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Pins the strings the CLI answers with. The rendered output of --version and
+// --help is checked by the smoke checks in run.sh, against the real binary.
+
+import testing
+
+include "../commands/commands.salam"
+
+func main:
+    testing.AssertEqStr(commands.Version, "0.0.1")
+    testing.AssertContains(commands.Usage(), "terminal music player")
+    ret testing.Summary()
+end
