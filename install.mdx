@@ -1,10 +1,49 @@
 ---
 title: "Install and build"
-description: "Build mizrab from source with the pinned Salam compiler."
+description: "Build mizrab from source with the pinned Salam compiler and the vendored basalam submodule."
 keywords:
   - "install"
   - "build"
   - "salam"
+  - "clone"
+  - "submodule"
+  - "macos"
 ---
 
-This page is migrated from the repository documentation in a follow-up commit.
+mizrab is built from source; there is no separate installer. You need the pinned Salam compiler, a C toolchain with LLVM, and a clone that includes the vendored basalam submodule.
+
+## Prerequisites
+
+- **Salam 0.5.6.** The pinned compiler version lives in `.salam-version`, and `salam version` must report exactly that. Build or install it from the [Salam repository](https://github.com/SalamLang/Salam).
+- **A C toolchain with LLVM.** Salam's LLVM backend uses `clang` and the system linker. On Debian/Ubuntu install `build-essential` and `clang`; on macOS install the Xcode command-line tools with `xcode-select --install`.
+- **macOS or Linux.**
+
+## Clone
+
+```sh
+git clone --recurse-submodules https://github.com/curedbylethe/mizrab
+cd mizrab
+```
+
+`--recurse-submodules` matters: `vendor/basalam` is a git submodule pinned to the `v0.2.0` release tag, and it stays empty without that flag. If you cloned without it, run `git submodule update --init --recursive` before building.
+
+## Build and run
+
+```sh
+make build
+make run
+```
+
+`make build` compiles `main.salam` to `build/mizrab` with `--backend=llvm`; `make run` builds and then runs the binary. At this commit that binary prints its usage block and exits 0 — there is no playback or interface yet. Run `make help` for the short target list, and see [make targets](/make-targets) for the full reference.
+
+## Use a compiler off `PATH`
+
+`SALAM` overrides the compiler the Makefile invokes, for a Salam build that is not on your `PATH`:
+
+```sh
+SALAM=/path/to/salam make build
+```
+
+## macOS deployment target
+
+On macOS the Makefile pins `MACOSX_DEPLOYMENT_TARGET` to the running OS version so the linker does not warn about a mismatched SDK. Leave it alone; if you need a different value, export your own before running `make`.
