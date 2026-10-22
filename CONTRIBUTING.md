@@ -51,12 +51,12 @@ you need to override it, export your own value before running `make`.
   CUR-503.
 - `spike/` — the miniaudio FFI spike: a tone program, the `ma_shim.{h,c}` glue,
   a measurement harness and a struct probe. It is throwaway once CUR-503
-  supersedes it; the findings are in `docs/spike-miniaudio.md`.
+  supersedes it; the findings are in
+  [the spike findings](https://mizrab.mintlify.app/spike-miniaudio).
 - `player/`, `library/`, `config/`, `ui/` — reserved for the application
   layer; the directories are empty until CUR-503 to CUR-508 fill them.
 - `tests/` — test programs, `.out` goldens and the shell harness; CUR-509
   extends the harness rather than replacing it.
-- `docs/` — written findings. `docs/spike-miniaudio.md` is the only file today.
 - `vendor/basalam` — the pinned basalam submodule.
 
 ## Tests
