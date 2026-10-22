@@ -13,6 +13,7 @@ SALAM_VERSION := $(shell cat .salam-version)
 # compiled in, so no OS-conditional backend set is needed.
 MINIAUDIO_DIR := audio
 MINIAUDIO_OBJ := $(BUILD)/miniaudio.o
+SHIM_OBJ := $(BUILD)/ma_shim.o
 MINIAUDIO_DEFS := -DMA_NO_DECODING -DMA_NO_ENCODING -DMA_NO_WAV -DMA_NO_FLAC \
 	-DMA_NO_MP3 -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER -DMA_NO_NODE_GRAPH \
 	-DMA_NO_ENGINE
@@ -23,7 +24,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test fmt fmt-check clean spike-build spike-run
+.PHONY: help build run test fmt fmt-check clean spike-build spike-run spike-check spike-check-device
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
@@ -32,8 +33,10 @@ help:
 	@echo "make fmt       format all Salam sources in place"
 	@echo "make fmt-check fail if any Salam source would be rewritten"
 	@echo "make clean     remove build output"
-	@echo "make spike-build compile $(MINIAUDIO_OBJ) and spike/probe.salam into $(BUILD)/spike"
-	@echo "make spike-run build and run the miniaudio linkage spike"
+	@echo "make spike-build compile $(MINIAUDIO_OBJ), $(SHIM_OBJ) and spike/tone.salam into $(BUILD)/spike"
+	@echo "make spike-run   build and run the tone spike on the default device"
+	@echo "make spike-check build and run the tone spike on the null backend"
+	@echo "make spike-check-device build and run the tone spike on the default device"
 	@echo "Salam $(SALAM_VERSION)"
 
 build:
@@ -55,15 +58,25 @@ fmt-check:
 clean:
 	rm -rf $(BUILD) .salam-build
 
-# The object is linked by path from spike/probe.salam. The compiler checks that
+# The objects are linked by path from spike/tone.salam. The compiler checks the
 # path relative to the source file but hands it to the linker from the current
 # directory, so the build runs from spike/ and the source says ../$(BUILD).
 $(MINIAUDIO_OBJ): $(MINIAUDIO_DIR)/miniaudio.c $(MINIAUDIO_DIR)/miniaudio.h
 	@mkdir -p $(BUILD)
 	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
 
-spike-build: $(MINIAUDIO_OBJ)
-	cd spike && $(SALAM) build probe.salam --output=../$(BUILD)/spike $(FLAGS)
+$(SHIM_OBJ): spike/ma_shim.c spike/ma_shim.h $(MINIAUDIO_DIR)/miniaudio.h
+	@mkdir -p $(BUILD)
+	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
+
+spike-build: $(MINIAUDIO_OBJ) $(SHIM_OBJ)
+	cd spike && $(SALAM) build tone.salam --output=../$(BUILD)/spike $(FLAGS)
 
 spike-run: spike-build
+	./$(BUILD)/spike
+
+spike-check: spike-build
+	./$(BUILD)/spike --null
+
+spike-check-device: spike-build
 	./$(BUILD)/spike
