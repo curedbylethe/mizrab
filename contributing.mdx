@@ -1,6 +1,6 @@
 ---
 title: "Contributing"
-description: "Code style, commit convention, pinned versions and the process gates for mizrab."
+description: "Code style, commit convention, pinned versions and how to report upstream findings."
 keywords:
   - "contributing"
   - "style"
@@ -8,4 +8,71 @@ keywords:
   - "pins"
 ---
 
-This page is migrated from the repository documentation in a follow-up commit.
+mizrab is a Salam program, so its style follows the compiler's formatter rather than taste. This page covers the code style, the commit convention, the four pinned versions and how to report a defect upstream. For the commands themselves see [make targets](/make-targets), for the harness see [tests](/tests) and for the tree see [repository layout](/repository-layout).
+
+## Code style
+
+- `salam format` is the authority. Run `make fmt` before committing; `make fmt-check` is the gate that rejects unformatted files.
+- Indent with 4 spaces. `.editorconfig` matches the formatter.
+- Every file starts with the GPL-3.0-or-later licence header comment.
+- Declaration order is imports, then `include`s, then declarations. The formatter enforces this order (`--fix-order` is on by default) and the compiler rejects the wrong order outright.
+- Every `pub` declaration carries an `@en "Name"` annotation followed by a `///` doc comment, which is basalam's convention. The doc comment comes after the annotation so `salam doc` picks it up.
+- Write the language, not a binding: use `std/term` for escape sequences.
+
+## Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`, with a scope when it helps.
+
+```text
+feat(commands): add the version command
+chore(deps): bump Salam to 0.5.7
+```
+
+- Imperative mood in the subject.
+- One coherent change per commit; no `wip` or `fixes` commits.
+- The tree is green after every commit: `make build && make test && make fmt-check`.
+
+## Version pins
+
+mizrab has exactly four pins. Each pin lives in one file or one submodule; the table repeats the current value for reference, and the file is the pin.
+
+| Pin | Where it lives | Current value |
+| --- | --- | --- |
+| Salam compiler | `.salam-version` | `0.5.6` |
+| basalam | `vendor/basalam` | `v0.2.0` (annotated), commit `926aefde852a00472b8f5e50e4b0804e79b27602` |
+| miniaudio | `audio/miniaudio.h` + `audio/miniaudio.c` | `0.11.25` from the [0.11.25 release](https://github.com/mackron/miniaudio/releases/tag/0.11.25); sha256 `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` (`.h`) and `ab1984bb9804ffd7b0303813595d0b345a8a86c34da1daffc353a14b34102a65` (`.c`) |
+| Mintlify CLI | `.mint-version` | `4.2.988` |
+
+The miniaudio sources are public domain or MIT-0.
+
+### Bumping a pin
+
+1. **Salam compiler.** Edit `.salam-version`. That file is the only place the version appears: the `Makefile` reads it, and CI asserts that `salam version` matches it.
+2. **basalam.** Move the submodule to the release tag and stage the gitlink:
+   ```sh
+   git -C vendor/basalam fetch --tags
+   git -C vendor/basalam checkout vX.Y.Z
+   git add vendor/basalam
+   ```
+   A submodule cannot track a tag: the gitlink records the commit the tag points at, so a bump still stores a SHA. Check out `vX.Y.Z` rather than the SHA, then record both the tag name and its SHA in the table above.
+3. **miniaudio.** Replace `audio/miniaudio.h` and `audio/miniaudio.c` with the files from the chosen release, then update the version, the release link and both sha256 values in the table above. Do not edit the vendored sources.
+4. **Mintlify CLI.** Edit `.mint-version`. That file is the only place the version appears: the `Makefile` and the CI `docs` job read it, and the README names the file rather than repeating the value.
+
+Verify the whole tree on the new pin before committing:
+
+```sh
+make clean && make build && make test && make fmt-check
+```
+
+Commit as `chore(deps): bump Salam to X`, `chore(deps): bump basalam to vX.Y.Z` or `chore(deps): bump Mintlify CLI to X`, with the new value recorded in the table in the same commit. If a bump breaks the build, that is a finding to report upstream, not a reason to loosen the pin or fall back to `latest`.
+
+## Upstream findings
+
+Any limitation in the Salam compiler or standard library, or in basalam, is reported upstream as it is found. Do not work around it silently. A report needs four fields:
+
+1. **`salam version`**: the full output, not just the number.
+2. **OS and terminal**: for example "macOS 15.6, arm64, Ghostty".
+3. **Minimal reproduction**: the smallest program, or the exact command, that shows the problem.
+4. **Expected vs actual**: what should happen, what happens instead, including the exit code and the relevant stdout/stderr, plus the workaround used.
+
+File it at [Salam issues](https://github.com/SalamLang/Salam/issues) or [basalam issues](https://github.com/curedbylethe/basalam/issues), then link it back from `FINDINGS.md`, the log of local findings and their upstream links.
