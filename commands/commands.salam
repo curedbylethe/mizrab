@@ -1,0 +1,26 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+package commands
+
+@en "Version"
+/// The application version, following semantic versioning.
+pub const Version := "0.0.1"
+
+@en "Usage"
+/// The one-line usage description printed by --help.
+pub func Usage(): str:
+    ret "a terminal music player built on basalam"
+end

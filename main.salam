@@ -1,0 +1,39 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+import flag
+import os
+
+include "commands/commands.salam"
+
+func main:
+    f := flag.New("mizrab", commands.Usage())
+    defer flag.Free(f)
+    flag.AddBool(f, "version", "v", false, "print the version and exit")
+    if not flag.Parse(f, os.Args()):
+        println "mizrab:", flag.Error(f)
+        ret 2
+    end
+    if flag.HelpWanted(f):
+        print flag.Usage(f)
+        ret 0
+    end
+    if flag.GetBool(f, "version"):
+        println "mizrab " + commands.Version
+        ret 0
+    end
+    print flag.Usage(f)
+    ret 0
+end
