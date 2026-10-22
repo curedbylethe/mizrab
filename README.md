@@ -5,7 +5,10 @@ the [Salam](https://github.com/SalamLang/Salam) programming language.
 
 > **Status: scaffold.** The binary answers `--version` and `--help` and prints
 > its usage when invoked bare. There is no playback, no library scanning and no
-> user interface yet; those land in later issues.
+> user interface yet; those land in later issues. A spike under `spike/` proved
+> that a Salam function can serve as miniaudio's data callback and fill f32
+> frames on Core Audio; the engine itself is not written
+> ([docs/spike-miniaudio.md](docs/spike-miniaudio.md)).
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists (CUR-511). -->
@@ -51,6 +54,17 @@ Every task is a `make` target; run `make help` for the same list.
 | `make fmt`      | Format every Salam source in place with `salam format`                |
 | `make fmt-check` | Fail if any Salam source would be rewritten                          |
 | `make clean`    | Remove `build/` and the compiler's `.salam-build/` scratch directory  |
+| `make spike-build` | Compile miniaudio and the shim, then link `spike/tone.salam` to `build/spike` |
+| `make spike-run` | Build the spike and play its 2 s tone on the default device          |
+| `make spike-check` | Build the spike and run it on miniaudio's null backend             |
+| `make spike-check-device` | Build the spike and run it on the default device; the name CI uses            |
+| `make spike-measure` | Print the spike's measurement table (M1–M8, real device)         |
+
+The `spike-*` targets belong to the FFI spike, not to the player. `make
+spike-build` compiles miniaudio with `-O2` and links two objects by relative
+path, so it is slower than `make build` on a clean tree; see
+[docs/spike-miniaudio.md](docs/spike-miniaudio.md) for the recipe and the
+measurements.
 
 `make test` runs `tests/run.sh`, which builds each `tests/*_test.salam`
 program with the LLVM backend and compares its stdout byte-for-byte with the
@@ -73,9 +87,9 @@ always run.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
-mizrab currently imports only the Salam standard library (`flag`, `os`) plus
+The player currently imports only the Salam standard library (`flag`, `os`) plus
 its own `commands` package; the basalam include arrives with the application
-layer.
+layer. The spike also imports `conv`, `math`, `mem` and `sync`.
 
 ## Repository layout
 
@@ -83,15 +97,17 @@ layer.
 | ------------- | ------------------------------------------------------------------------- |
 | `main.salam`  | Entry point: flag parsing, `--version`, `--help`, usage output            |
 | `commands/`   | Command layer: the version constant and the usage string (more to come)    |
-| `audio/`      | Reserved for the playback backend (CUR-502 vendors miniaudio here)         |
+| `audio/`      | Vendored miniaudio 0.11.25: `miniaudio.c` (the implementation unit) and `miniaudio.h`; the playback backend lands here with CUR-503 |
+| `spike/`      | The miniaudio FFI spike: `tone.salam`, `ma_shim.{h,c}`, the measurement harness and a struct probe; throwaway once CUR-503 exists |
 | `player/`     | Reserved for playback state and control                                    |
 | `library/`    | Reserved for library scanning and metadata                                 |
 | `config/`     | Reserved for configuration loading                                         |
 | `ui/`         | Reserved for the basalam-based terminal interface                          |
 | `tests/`      | Test programs, their `.out` goldens and the `run.sh` harness               |
 | `vendor/`     | Vendored dependencies; `vendor/basalam` is a submodule pinned to a commit  |
+| `docs/`       | Written findings; `docs/spike-miniaudio.md` is the only file today          |
 
-The reserved directories hold only a `.gitkeep` today.
+`player/`, `library/`, `config/` and `ui/` hold only a `.gitkeep` today.
 
 ## Licence
 
