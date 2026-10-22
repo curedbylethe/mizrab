@@ -1,0 +1,53 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # The submodule carries the pinned basalam library; recursive init is the
+      # only mechanism, so a broken pin fails here instead of at link time.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The compiler version is read from .salam-version, not repeated here:
+      # one source for the pin, so CI cannot drift from the file.
+      - name: Read the Salam pin
+        id: pin
+        run: echo "version=$(cat .salam-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Salam
+        uses: SalamLang/Salam/.github/actions/setup-salam@main
+        with:
+          version: ${{ steps.pin.outputs.version }}
+
+      # A mismatch is a named failure, not a silent download of another compiler.
+      - name: Assert the compiler matches the pin
+        run: |
+          installed="$(salam version | head -n 1 | awk '{print $2}')"
+          installed="${installed#v}"
+          pinned="$(cat .salam-version)"
+          echo "installed=$installed pinned=$pinned"
+          test "$installed" = "$pinned"
+
+      - name: make fmt-check
+        run: make fmt-check
+
+      # LLVM strict: an LLVM codegen failure must not fall back to the C
+      # backend, so no step here passes --backend=c or retries on failure.
+      - name: make build
+        run: make build
+
+      - name: make test
+        run: make test
