@@ -41,7 +41,8 @@ you need to override it, export your own value before running `make`.
 - `main.salam` — the entry point (CUR-501).
 - `commands/` — the command layer; the version and usage text today, the
   command parser later (CUR-505, CUR-506, CUR-508 extend it).
-- `audio/` — reserved for the playback backend (CUR-502 vendors miniaudio here).
+- `audio/` — the vendored miniaudio implementation; the playback backend lands
+  here with CUR-503.
 - `player/`, `library/`, `config/`, `ui/` — reserved for the application
   layer; the directories are empty until CUR-503 to CUR-508 fill them.
 - `tests/` — test programs, `.out` goldens and the shell harness; CUR-509
@@ -97,14 +98,15 @@ chore(deps): bump Salam to 0.5.7
 
 ## Version pins and the bump procedure
 
-mizrab has exactly two pins:
+mizrab has exactly three pins:
 
 | Pin                | Where it lives      | Current value                                |
 | ------------------ | ------------------- | -------------------------------------------- |
 | Salam compiler     | `.salam-version`    | `0.5.6`                                      |
 | basalam            | `vendor/basalam`    | `6bc13da66d07228b4eae40de111be60cbf1085b9` (no tags exist upstream) |
+| miniaudio          | `audio/miniaudio.h` + `audio/miniaudio.c` | `0.11.25` from https://github.com/mackron/miniaudio/releases/tag/0.11.25; sha256 `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` (`.h`) and `ab1984bb9804ffd7b0303813595d0b345a8a86c34da1daffc353a14b34102a65` (`.c`); public domain or MIT-0 |
 
-To bump either one:
+To bump any one:
 
 1. **Compiler.** Edit `.salam-version`. That file is the only place the
    version appears; the Makefile reads it, and CI asserts that `salam version`
