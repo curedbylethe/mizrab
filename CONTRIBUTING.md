@@ -34,6 +34,11 @@ you need to override it, export your own value before running `make`.
 | `make fmt`           | Format all Salam sources in place                                   |
 | `make fmt-check`     | Fail if any Salam source would be rewritten                         |
 | `make clean`         | Remove `build/` and `.salam-build/`                                 |
+| `make spike-build`   | Compile miniaudio and the shim, then link `spike/tone.salam`        |
+| `make spike-run`     | Build the spike and play its tone on the default device             |
+| `make spike-check`   | Build and run the spike on miniaudio's null backend                 |
+| `make spike-check-device` | Build and run the spike on the default device                  |
+| `make spike-measure` | Print the spike's M1–M8 measurement table                           |
 | `sh tests/run.sh <name>` | Run the named test only, for example `sh tests/run.sh cli_test`   |
 
 ## Repository layout
@@ -41,12 +46,17 @@ you need to override it, export your own value before running `make`.
 - `main.salam` — the entry point (CUR-501).
 - `commands/` — the command layer; the version and usage text today, the
   command parser later (CUR-505, CUR-506, CUR-508 extend it).
-- `audio/` — the vendored miniaudio implementation; the playback backend lands
-  here with CUR-503.
+- `audio/` — miniaudio 0.11.25, vendored as `miniaudio.h` plus a two-line
+  `miniaudio.c` implementation unit; the playback backend lands here with
+  CUR-503.
+- `spike/` — the miniaudio FFI spike: a tone program, the `ma_shim.{h,c}` glue,
+  a measurement harness and a struct probe. It is throwaway once CUR-503
+  supersedes it; the findings are in `docs/spike-miniaudio.md`.
 - `player/`, `library/`, `config/`, `ui/` — reserved for the application
   layer; the directories are empty until CUR-503 to CUR-508 fill them.
 - `tests/` — test programs, `.out` goldens and the shell harness; CUR-509
   extends the harness rather than replacing it.
+- `docs/` — written findings. `docs/spike-miniaudio.md` is the only file today.
 - `vendor/basalam` — the pinned basalam submodule.
 
 ## Tests
