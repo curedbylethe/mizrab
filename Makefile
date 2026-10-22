@@ -14,6 +14,7 @@ SALAM_VERSION := $(shell cat .salam-version)
 MINIAUDIO_DIR := audio
 MINIAUDIO_OBJ := $(BUILD)/miniaudio.o
 SHIM_OBJ := $(BUILD)/ma_shim.o
+SPIKE_MEASURE_BIN := $(BUILD)/spike-measure
 MINIAUDIO_DEFS := -DMA_NO_DECODING -DMA_NO_ENCODING -DMA_NO_WAV -DMA_NO_FLAC \
 	-DMA_NO_MP3 -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER -DMA_NO_NODE_GRAPH \
 	-DMA_NO_ENGINE
@@ -24,7 +25,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test fmt fmt-check clean spike-build spike-run spike-check spike-check-device
+.PHONY: help build run test fmt fmt-check clean spike-build spike-run spike-check spike-check-device spike-measure
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
@@ -37,6 +38,7 @@ help:
 	@echo "make spike-run   build and run the tone spike on the default device"
 	@echo "make spike-check build and run the tone spike on the null backend"
 	@echo "make spike-check-device build and run the tone spike on the default device"
+	@echo "make spike-measure print the STAGE-03 measurement table (M1-M8, real device)"
 	@echo "Salam $(SALAM_VERSION)"
 
 build:
@@ -80,3 +82,11 @@ spike-check: spike-build
 
 spike-check-device: spike-build
 	./$(BUILD)/spike
+
+# The measurement binary is separate so `spike-check` (the CI path) keeps
+# exactly the behaviour it shipped with; measure.salam still defaults to a tone.
+$(SPIKE_MEASURE_BIN): $(MINIAUDIO_OBJ) $(SHIM_OBJ) spike/measure.salam
+	cd spike && $(SALAM) build measure.salam --output=../$(SPIKE_MEASURE_BIN) $(FLAGS)
+
+spike-measure: $(SPIKE_MEASURE_BIN)
+	sh spike/measure.sh

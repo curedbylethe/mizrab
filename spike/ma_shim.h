@@ -28,4 +28,7 @@ void mizrab_ma_destroy(void* device);
 const char* mizrab_ma_last_error(void);
 const char* mizrab_ma_backend_name(void* device);
 
+/* Salam has no sizeof, so it cannot fill a timespec; hand it a scalar instead. */
+long long mizrab_now_ns(void);
+
 #endif
