@@ -15,6 +15,21 @@ the [Salam](https://github.com/SalamLang/Salam) programming language.
 
 Screenshot: coming with the first playable build.
 
+## Documentation
+
+The documentation site is <https://mizrab.mintlify.app>. Preview it locally with
+the Mintlify CLI pinned in `.mint-version` (the Makefile and CI read that file,
+so the version is not repeated here):
+
+```sh
+npm i -g "mint@$(cat .mint-version)"
+make docs
+```
+
+`make docs-check` validates `docs.json` and checks internal links and anchors;
+`make docs-format-check` fails if `mint format` would rewrite a page. The format
+gate compares against the index, so stage or commit page edits first.
+
 ## Install
 
 Prerequisites:
@@ -43,41 +58,14 @@ prints the same block and exits 0.
 
 ## Build and run
 
-Every task is a `make` target; run `make help` for the same list.
+`make build` compiles `main.salam` to `build/mizrab` with the LLVM backend;
+`make run` builds and runs it. `make test` checks each `tests/*_test.salam`
+program against its `.out` golden, then smoke-tests the binary;
+[tests](https://mizrab.mintlify.app/tests) covers the convention, the checks and
+running a single test.
 
-| Command         | What it does                                                          |
-| --------------- | --------------------------------------------------------------------- |
-| `make help`     | List the targets and the Salam version the Makefile reads             |
-| `make build`    | Compile `main.salam` to `build/mizrab` with `--backend=llvm`          |
-| `make run`      | Build, then run `build/mizrab`                                        |
-| `make test`     | Build and run `tests/run.sh`                                          |
-| `make fmt`      | Format every Salam source in place with `salam format`                |
-| `make fmt-check` | Fail if any Salam source would be rewritten                          |
-| `make clean`    | Remove `build/` and the compiler's `.salam-build/` scratch directory  |
-| `make spike-build` | Compile miniaudio and the shim, then link `spike/tone.salam` to `build/spike` |
-| `make spike-run` | Build the spike and play its 2 s tone on the default device          |
-| `make spike-check` | Build the spike and run it on miniaudio's null backend             |
-| `make spike-check-device` | Build the spike and run it on the default device; the name CI uses            |
-| `make spike-measure` | Print the spike's measurement table (M1–M8, real device)         |
-
-The `spike-*` targets belong to the FFI spike, not to the player. `make
-spike-build` compiles miniaudio with `-O2` and links two objects by relative
-path, so it is slower than `make build` on a clean tree; see
-[the spike findings](https://mizrab.mintlify.app/spike-miniaudio) for the recipe
-and the measurements.
-
-`make test` runs `tests/run.sh`, which builds each `tests/*_test.salam`
-program with the LLVM backend and compares its stdout byte-for-byte with the
-matching `.out` golden. `tests/cli_test.salam` makes 2 assertions; the harness
-then smoke-tests the real binary three ways (`--version`, `--help`, an unknown
-flag). One test on its own:
-
-```sh
-sh tests/run.sh cli_test
-```
-
-That narrows the golden checks to `cli_test`; the three binary smoke checks
-always run.
+[Make targets](https://mizrab.mintlify.app/make-targets) documents every target,
+including `make help` and the `spike-*` group.
 
 ## Built on
 
@@ -93,20 +81,10 @@ layer. The spike also imports `conv`, `math`, `mem` and `sync`.
 
 ## Repository layout
 
-| Path          | Contents                                                                  |
-| ------------- | ------------------------------------------------------------------------- |
-| `main.salam`  | Entry point: flag parsing, `--version`, `--help`, usage output            |
-| `commands/`   | Command layer: the version constant and the usage string (more to come)    |
-| `audio/`      | Vendored miniaudio 0.11.25: `miniaudio.c` (the implementation unit) and `miniaudio.h`; the playback backend lands here with CUR-503 |
-| `spike/`      | The miniaudio FFI spike: `tone.salam`, `ma_shim.{h,c}`, the measurement harness and a struct probe; throwaway once CUR-503 exists |
-| `player/`     | Reserved for playback state and control                                    |
-| `library/`    | Reserved for library scanning and metadata                                 |
-| `config/`     | Reserved for configuration loading                                         |
-| `ui/`         | Reserved for the basalam-based terminal interface                          |
-| `tests/`      | Test programs, their `.out` goldens and the `run.sh` harness               |
-| `vendor/`     | Vendored dependencies; `vendor/basalam` is a submodule pinned to the `v0.2.0` tag's commit |
-
-`player/`, `library/`, `config/` and `ui/` hold only a `.gitkeep` today.
+`main.salam` is the entry point, `commands/` the command layer, `audio/` the
+vendored miniaudio, `spike/` the throwaway FFI spike and `tests/` the harness.
+[Repository layout](https://mizrab.mintlify.app/repository-layout) describes
+every directory, including the reserved application-layer packages.
 
 ## Licence
 
