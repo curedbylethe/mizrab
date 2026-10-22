@@ -1,0 +1,84 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "mizrab",
+  "colors": {
+    "primary": "#16A34A",
+    "light": "#07C983",
+    "dark": "#15803D"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "pages": [
+      {
+        "group": "Getting started",
+        "pages": [
+          "index",
+          "install"
+        ]
+      },
+      {
+        "group": "Contributing",
+        "pages": [
+          "make-targets",
+          "tests",
+          "repository-layout",
+          "contributing"
+        ]
+      },
+      {
+        "group": "Findings",
+        "pages": [
+          "spike-miniaudio"
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/curedbylethe/mizrab",
+          "icon": "github"
+        },
+        {
+          "anchor": "Salam language",
+          "href": "https://github.com/SalamLang/Salam",
+          "icon": "book-open-cover"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Issues",
+        "href": "https://github.com/curedbylethe/mizrab/issues"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/curedbylethe/mizrab"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/curedbylethe/mizrab"
+    }
+  }
+}
