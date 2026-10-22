@@ -113,7 +113,7 @@ mizrab has exactly three pins:
 | Pin                | Where it lives      | Current value                                |
 | ------------------ | ------------------- | -------------------------------------------- |
 | Salam compiler     | `.salam-version`    | `0.5.6`                                      |
-| basalam            | `vendor/basalam`    | `6bc13da66d07228b4eae40de111be60cbf1085b9` (no tags exist upstream) |
+| basalam            | `vendor/basalam`    | `v0.2.0` (annotated), commit `926aefde852a00472b8f5e50e4b0804e79b27602` |
 | miniaudio          | `audio/miniaudio.h` + `audio/miniaudio.c` | `0.11.25` from https://github.com/mackron/miniaudio/releases/tag/0.11.25; sha256 `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` (`.h`) and `ab1984bb9804ffd7b0303813595d0b345a8a86c34da1daffc353a14b34102a65` (`.c`); public domain or MIT-0 |
 
 To bump any one:
@@ -121,19 +121,21 @@ To bump any one:
 1. **Compiler.** Edit `.salam-version`. That file is the only place the
    version appears; the Makefile reads it, and CI asserts that `salam version`
    matches it.
-2. **basalam.** Move the submodule and stage the gitlink:
+2. **basalam.** Move the submodule to the release tag and stage the gitlink:
 
    ```sh
-   git -C vendor/basalam fetch
-   git -C vendor/basalam checkout <sha>
+   git -C vendor/basalam fetch --tags
+   git -C vendor/basalam checkout vX.Y.Z
    git add vendor/basalam
    ```
 
-   Then update the SHA recorded in this file.
+   A submodule cannot track a tag: the gitlink records the commit the tag
+   points at, so a bump still stores a SHA. Check out `vX.Y.Z` rather than the
+   SHA, then record both the tag name and its SHA in this file.
 3. Verify the whole tree on the new pin:
    `make clean && make build && make test && make fmt-check`.
 4. Commit as `chore(deps): bump Salam to X` or
-   `chore(deps): bump basalam to <short-sha>`, with the new SHA recorded in
+   `chore(deps): bump basalam to vX.Y.Z`, with the new tag and SHA recorded in
    this file in the same commit.
 5. If a bump breaks the build, that is a finding to report upstream (below),
    not a reason to loosen the pin or fall back to `latest`.

@@ -83,7 +83,7 @@ always run.
 
 - **[basalam](https://github.com/curedbylethe/basalam)** — a retained-mode
   terminal UI library for Salam. It is vendored at `vendor/basalam` and pinned
-  to a commit, not a branch or tag (basalam has no tags yet).
+  to the `v0.2.0` release tag, by the commit that tag points at.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
@@ -104,7 +104,7 @@ layer. The spike also imports `conv`, `math`, `mem` and `sync`.
 | `config/`     | Reserved for configuration loading                                         |
 | `ui/`         | Reserved for the basalam-based terminal interface                          |
 | `tests/`      | Test programs, their `.out` goldens and the `run.sh` harness               |
-| `vendor/`     | Vendored dependencies; `vendor/basalam` is a submodule pinned to a commit  |
+| `vendor/`     | Vendored dependencies; `vendor/basalam` is a submodule pinned to the `v0.2.0` tag's commit |
 | `docs/`       | Written findings; `docs/spike-miniaudio.md` is the only file today          |
 
 `player/`, `library/`, `config/` and `ui/` hold only a `.gitkeep` today.
