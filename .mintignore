@@ -1,0 +1,17 @@
+# Trees mint must not format or link-check: vendored docs, Salam sources, build output, agent scratch.
+.agents/
+.claude/
+.codegraph/
+.github/
+.opencode/
+audio/
+build/
+commands/
+config/
+library/
+player/
+spike/
+tests/
+ui/
+vendor/
+FINDINGS.md
