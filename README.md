@@ -8,7 +8,7 @@ the [Salam](https://github.com/SalamLang/Salam) programming language.
 > user interface yet; those land in later issues. A spike under `spike/` proved
 > that a Salam function can serve as miniaudio's data callback and fill f32
 > frames on Core Audio; the engine itself is not written
-> ([docs/spike-miniaudio.md](docs/spike-miniaudio.md)).
+> ([the spike's findings](https://mizrab.mintlify.app/spike-miniaudio)).
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists (CUR-511). -->
@@ -63,8 +63,8 @@ Every task is a `make` target; run `make help` for the same list.
 The `spike-*` targets belong to the FFI spike, not to the player. `make
 spike-build` compiles miniaudio with `-O2` and links two objects by relative
 path, so it is slower than `make build` on a clean tree; see
-[docs/spike-miniaudio.md](docs/spike-miniaudio.md) for the recipe and the
-measurements.
+[the spike findings](https://mizrab.mintlify.app/spike-miniaudio) for the recipe
+and the measurements.
 
 `make test` runs `tests/run.sh`, which builds each `tests/*_test.salam`
 program with the LLVM backend and compares its stdout byte-for-byte with the
@@ -105,7 +105,6 @@ layer. The spike also imports `conv`, `math`, `mem` and `sync`.
 | `ui/`         | Reserved for the basalam-based terminal interface                          |
 | `tests/`      | Test programs, their `.out` goldens and the `run.sh` harness               |
 | `vendor/`     | Vendored dependencies; `vendor/basalam` is a submodule pinned to the `v0.2.0` tag's commit |
-| `docs/`       | Written findings; `docs/spike-miniaudio.md` is the only file today          |
 
 `player/`, `library/`, `config/` and `ui/` hold only a `.gitkeep` today.
 
