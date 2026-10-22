@@ -14,11 +14,12 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run fmt fmt-check clean
+.PHONY: help build run test fmt fmt-check clean
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
 	@echo "make run       build and run the player"
+	@echo "make test      build and run tests/*_test.salam plus the CLI smoke checks"
 	@echo "make fmt       format all Salam sources in place"
 	@echo "make fmt-check fail if any Salam source would be rewritten"
 	@echo "make clean     remove build output"
@@ -30,6 +31,9 @@ build:
 
 run: build
 	./$(BIN)
+
+test: build
+	sh tests/run.sh
 
 fmt:
 	$(SALAM) format $(SOURCES)
