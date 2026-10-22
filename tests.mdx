@@ -5,6 +5,57 @@ keywords:
   - "tests"
   - "golden"
   - "harness"
+  - "testing"
+  - "smoke checks"
 ---
 
-This page is migrated from the repository documentation in a follow-up commit.
+mizrab's tests follow the convention of Salam's own test corpus and of basalam: a test is an ordinary Salam program, and its stdout is the expected result. `make test` builds the binary, then runs `sh tests/run.sh`.
+
+## Convention
+
+- `tests/<name>_test.salam` is a normal program. It asserts with `std/testing` and ends with `ret testing.Summary()`, whose return value is the exit code.
+- `tests/<name>_test.out` is the exact expected stdout. Today that is the `--` separator line and the `tests: 2 passed, 0 failed` summary, for `tests/cli_test.out`.
+
+A test passes when it builds, exits 0, and its stdout matches the golden byte for byte.
+
+## What the harness does
+
+For each test program, `tests/run.sh`:
+
+1. builds `tests/<name>_test.salam` into `build/tests/<name>` with `--backend=llvm --log-level=warn`;
+2. runs it with an empty stdin, so a test that reads the terminal cannot pick up input;
+3. bounds the run with a 30-second watchdog, so a hung test fails instead of stalling the suite; `TEST_TIMEOUT` in seconds overrides the bound;
+4. fails on a non-zero exit code, a timeout, or a `diff -u` mismatch against the golden.
+
+The harness needs `build/mizrab` and stops if it is missing, which is why `make test` builds first. Calling the harness directly needs a prior `make build`.
+
+## The binary smoke checks
+
+After the test programs, three checks run against the real binary rather than a test program. They run on every invocation, including a single named test:
+
+- `--version` exits 0 and prints the pinned version;
+- `--help` exits 0 and prints the usage line;
+- an unknown flag is a usage error, exit 2.
+
+They count towards the failure total only; the `N passed, M failed` summary counts test programs.
+
+## Run one test
+
+```sh
+make build
+sh tests/run.sh cli_test
+```
+
+With no names, the harness runs every `tests/*_test.salam`. A name narrows the golden checks; the three smoke checks still run.
+
+## Add a test
+
+1. Write `tests/<something>_test.salam`, using `std/testing` assertions and ending with `ret testing.Summary()`.
+2. Run it and read the output:
+   ```sh
+   sh tests/run.sh <something>_test
+   ```
+3. When the output is what you expect, save it verbatim as `tests/<something>_test.out`.
+4. Run `make test` to confirm the whole suite and the smoke checks pass.
+
+Goldens are byte-exact and there is no update flag: the `.out` file is edited by hand. `make test` and the harness only read `tests/`; neither rewrites a golden.

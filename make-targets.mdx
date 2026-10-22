@@ -5,6 +5,66 @@ keywords:
   - "make"
   - "targets"
   - "build"
+  - "format"
+  - "spike"
 ---
 
-This page is migrated from the repository documentation in a follow-up commit.
+Every task is a `make` target. `make help` prints the short list and the Salam version the `Makefile` reads from `.salam-version`; this page is the full reference, with the command each target runs. The `Makefile` is the source of truth.
+
+`SALAM=/path/to/salam` overrides the compiler for every target that invokes it, if your Salam build is not on `PATH`; see [install and build](/install).
+
+## Build and run
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make help` | prints the target list and `Salam <version>` | quick reference, no build |
+| `make build` | `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab` |
+| `make run` | `make build`, then `./build/mizrab` | build and run the player |
+| `make test` | `make build`, then `sh tests/run.sh` | golden tests plus the CLI smoke checks; see [tests](/tests) |
+| `make clean` | `rm -rf build .salam-build` | remove build output and the compiler's scratch directory |
+
+The one backend is LLVM: there is no `--backend=c` path and no second build target.
+
+## Formatting
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make fmt` | `salam format main.salam commands` | rewrite every Salam source in place |
+| `make fmt-check` | `salam format --check main.salam commands` | fail if any source would be rewritten |
+
+`salam format` is the authority for style; the conventions are on the [contributing](/contributing) page.
+
+## Documentation site
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make docs` | `mint dev` | serve the site locally; the CLI version is pinned in `.mint-version` |
+| `make docs-check` | `mint validate`, then `mint broken-links --check-anchors` | validate `docs.json` and check internal links and anchors |
+| `make docs-format-check` | `mint format`, then `git diff --exit-code -- '*.mdx' 'docs.json'` | fail if the formatter would rewrite a page |
+
+`make docs-format-check` compares the worktree with the index, so it fails on an unstaged formatting change even when the page is correct. Stage your page edits before running it; CI runs it on a clean checkout.
+
+## Miniaudio spike
+
+The `spike-*` targets belong to the FFI spike, not to the player. `make spike-build` compiles miniaudio with `-O2` and links two objects by relative path, so on a clean tree it is slower than `make build`. The recipe and measurements are in [the miniaudio spike](/spike-miniaudio).
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make spike-build` | compiles `audio/miniaudio.c` and `spike/ma_shim.c` into `build/`, then `cd spike && salam build tone.salam --output=../build/spike` | build the tone program to `build/spike` |
+| `make spike-run` | `make spike-build`, then `./build/spike` | build and play the tone on the default device |
+| `make spike-check` | `make spike-build`, then `./build/spike --null` | build and run on miniaudio's null backend; the macOS CI path |
+| `make spike-check-device` | `make spike-build`, then `./build/spike` | build and run on the default device; the Linux CI path |
+| `make spike-measure` | builds `spike/measure.salam` into `build/spike-measure`, then `sh spike/measure.sh` | print the M1–M9 measurement table from a real device |
+
+`spike-measure` uses its own binary so that `spike-check`, the CI path, keeps exactly the behaviour it shipped with.
+
+## Run the harness directly
+
+`sh tests/run.sh [name ...]` is not a make target. It runs the harness alone, against the `build/mizrab` that already exists, on the named tests or on every `tests/*_test.salam` when no name is given:
+
+```sh
+make build
+sh tests/run.sh cli_test
+```
+
+See [tests](/tests) for the harness convention.
