@@ -1,0 +1,385 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// STAGE-03 evidence, not a feature. Modes:
+//   (none)                  the tone, so this binary can stand in for tone.salam
+//   --measure               M4, M5, M8, M9 on the default device
+//   --alloc-in-callback     M6, baseline pass then alloc pass
+//   --print-in-callback     M7, one println per 100 callbacks
+//   --null                  use the null backend (pacing is timer-approximate,
+//                           so never quote M4/M5 from it)
+//
+// M1-M3 are build quantities and live in spike/measure.sh.
+
+import conv
+import math
+import mem
+import os
+import sync
+
+// The miniaudio and shim objects built by `make spike-build`. Paths are
+// checked relative to this file and linked from the working directory, so the
+// build runs from spike/ and the source says ../build.
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+extern:
+    func mizrab_ma_create(fill: void *, rate: u32, channels: u32, null_backend: int): void *
+    func mizrab_ma_start(dev: void *): int
+    func mizrab_ma_stop(dev: void *): int
+    func mizrab_ma_destroy(dev: void *)
+    func mizrab_ma_last_error(): str
+    func mizrab_ma_backend_name(dev: void *): str
+    func mizrab_now_ns(): i64
+end
+
+// 8192 callbacks is ~80 s of 480-frame audio, far more than the 2 s pass.
+const CAP := 8192
+
+mut g_phase := 0.0
+mut g_frames := 0 as u64
+mut g_rate := 48000 as u32
+mut g_channels := 2 as u32
+mut g_count := 0
+mut g_first_ns := -1 as i64
+mut g_start_ns := 0 as i64
+mut g_counter := 0 as i64
+mut g_alloc_ok := 0
+mut g_alloc_null := 0
+mut g_printed := 0
+mut g_mode_alloc := 0
+mut g_mode_print := 0
+mut g_backend := ""
+
+// Buffers are allocated in main before start: nothing may allocate while M5
+// measures this callback.
+mut g_entry := null as i64*
+mut g_exec := null as i64*
+mut g_scratch := null as i64*
+
+func ms_of(ns: i64): str:
+    ret conv.FormatFloatPrec((ns as f64) / 1000000.0, 3) + " ms"
+end
+
+// Deliberately an ordinary, non-exported package function: M8 asks whether the
+// audio thread may call one and mutate a module-level counter.
+func bump_counter():
+    g_counter = g_counter + 1
+end
+
+func sort_i64(a: i64 *, n: int):
+    mut i := 1
+    until i < n:
+        v := a[i]
+        mut j := i - 1
+        until j >= 0:
+            if a[j] <= v:
+                break
+            end
+            a[j + 1] = a[j]
+            j = j - 1
+        end
+        a[j + 1] = v
+        i = i + 1
+    end
+end
+
+func samples(): int:
+    if g_count > CAP:
+        ret CAP
+    end
+    ret g_count
+end
+
+// Sorts a in place, so call it only after the pass it describes has stopped.
+// Returns the median (the upper of the two for an even count).
+func stats_line(label: str, a: i64 *, n: int): i64:
+    if n <= 0:
+        println label + ": no samples"
+        ret 0
+    end
+
+    mut lo := a[0]
+    mut hi := a[0]
+    mut sum := 0 as i64
+    mut i := 0
+    until i < n:
+        v := a[i]
+        sum = sum + v
+        if v < lo:
+            lo = v
+        end
+        if v > hi:
+            hi = v
+        end
+        i = i + 1
+    end
+
+    sort_i64(a, n)
+    med := a[n / 2]
+    mean := (sum as f64) / (n as f64)
+
+    println label + ": min=" + ms_of(lo) + " median=" + ms_of(med) + " mean=" + ms_of(mean as i64) + " max=" + ms_of(hi) + " n=" + conv.FormatInt(n as i64)
+    ret med
+end
+
+// Fills g_scratch with the gaps between consecutive callback entries and
+// returns how many gaps it wrote.
+func fill_deltas(n: int): int:
+    if n < 2:
+        ret 0
+    end
+    mut i := 0
+    until i < n - 1:
+        g_scratch[i] = g_entry[i + 1] - g_entry[i]
+        i = i + 1
+    end
+    ret n - 1
+end
+
+func reset_pass():
+    g_count = 0
+    g_frames = 0
+    g_first_ns = -1
+    g_counter = 0
+    g_alloc_ok = 0
+    g_alloc_null = 0
+    g_printed = 0
+    g_phase = 0.0
+end
+
+func run_pass(dev: void *, ms: int): int:
+    reset_pass()
+    g_start_ns = mizrab_now_ns()
+    if mizrab_ma_start(dev) != 0:
+        println "mizrab_ma_last_error: " + mizrab_ma_last_error()
+        ret 1
+    end
+    sync.SleepMs(ms)
+    g_backend = mizrab_ma_backend_name(dev)
+    mizrab_ma_stop(dev)
+    ret 0
+end
+
+// Called from miniaudio's audio thread. No ma_device_* lifecycle call here:
+// the upstream manual states that deadlocks (M9).
+export:
+    func mizrab_measure_fill(_dev: void *, out: void *, _inp: void *, frames: u32):
+        t0 := mizrab_now_ns()
+        n := g_count
+        if g_first_ns < 0:
+            g_first_ns = t0 - g_start_ns
+        end
+        if n < CAP:
+            g_entry[n] = t0
+        end
+
+        samples_out := out as f32 *
+        step := math.TAU * 440.0 / (g_rate as f64)
+        mut i := 0
+        until i < (frames as int):
+            sample := (math.Sin(g_phase) * 0.2) as f32
+            mut c := 0
+            until c < (g_channels as int):
+                samples_out[(i * (g_channels as int) + c) as i64] = sample
+                c = c + 1
+            end
+            g_phase = g_phase + step
+            if g_phase >= math.TAU:
+                g_phase = g_phase - math.TAU
+            end
+            i = i + 1
+        end
+        g_frames = g_frames + (frames as u64)
+
+        // M8: plain Salam function and global mutation from the audio thread.
+        bump_counter()
+
+        // M6: allocate and free inside the measured callback.
+        if g_mode_alloc != 0:
+            p := mem.Allocate(1024 as u64)
+            if p == null:
+                g_alloc_null = g_alloc_null + 1
+            else:
+                mem.Free(p)
+                g_alloc_ok = g_alloc_ok + 1
+            end
+        end
+
+        // M7: one println per 100 callbacks.
+        if g_mode_print != 0:
+            if n % 100 == 0:
+                println "[cb] print-in-callback at " + conv.FormatInt(n as i64)
+                g_printed = g_printed + 1
+            end
+        end
+
+        if n < CAP:
+            g_exec[n] = mizrab_now_ns() - t0
+        end
+        g_count = n + 1
+    end
+end
+
+func measure_mode(dev: void *):
+    if run_pass(dev, 2000) != 0:
+        ret
+    end
+
+    n := samples()
+    println "M4 cadence (--measure, real device " + g_backend + ", " + conv.FormatUint(g_rate as u64) + " Hz, " + conv.FormatUint(g_channels as u64) + " ch): callbacks=" + conv.FormatInt(n as i64)
+    d := fill_deltas(n)
+    stats_line("M4 callback entry delta", g_scratch, d)
+    println "M4 time-to-first-callback (mizrab_ma_start -> first entry): " + ms_of(g_first_ns)
+
+    stats_line("M5 callback execution (tone fill only)", g_exec, n)
+    println "M5 median is the upper of the two middle samples for an even count"
+
+    calls := g_count as i64
+    println "M8 plain Salam function from the callback: yes, counter=" + conv.FormatInt(g_counter) + " callbacks=" + conv.FormatInt(calls) + " match=" + conv.FormatBool(g_counter == calls)
+    println "M9 not tested (upstream manual: lifecycle calls inside the callback deadlock)"
+end
+
+func alloc_mode(dev: void *):
+    g_mode_alloc = 0
+    if run_pass(dev, 2000) != 0:
+        ret
+    end
+    bn := samples()
+    base_med := stats_line("M6 baseline callback execution (no alloc)", g_exec, bn)
+
+    g_mode_alloc = 1
+    if run_pass(dev, 2000) != 0:
+        ret
+    end
+    an := samples()
+    alloc_med := stats_line("M6 callback execution with mem.Allocate(1024)+Free", g_exec, an)
+    // stats_line sorted g_exec, so the last element is the max.
+    alloc_max := g_exec[an - 1]
+
+    d := fill_deltas(an)
+    period := stats_line("M6 callback entry delta with alloc", g_scratch, d)
+
+    println "M6 allocation in callback (--alloc-in-callback): mem.Allocate(1024) non-null " + conv.FormatInt(g_alloc_ok as i64) + "/" + conv.FormatInt((g_alloc_ok + g_alloc_null) as i64) + " callbacks, null " + conv.FormatInt(g_alloc_null as i64)
+    if base_med > 0:
+        ratio := (alloc_med as f64) / (base_med as f64)
+        println "M6 comparison: median " + conv.FormatFloatPrec(ratio, 2) + "x baseline (" + ms_of(base_med) + " -> " + ms_of(alloc_med) + ")"
+    end
+    // No microphone in the process: the only machine-checkable claim is whether
+    // a callback can overrun its own period.
+    if period > 0:
+        println "M6 audible: max exec " + ms_of(alloc_max) + " vs callback period " + ms_of(period) + ", dropout budget " + conv.FormatBool(alloc_max < period) + "; listening is a human step"
+    else:
+        println "M6 audible: max exec " + ms_of(alloc_max) + ", no period sample; listening is a human step"
+    end
+
+    g_mode_alloc = 0
+end
+
+func print_mode(dev: void *):
+    g_mode_print = 1
+    reset_pass()
+    g_start_ns = mizrab_now_ns()
+    if mizrab_ma_start(dev) != 0:
+        println "mizrab_ma_last_error: " + mizrab_ma_last_error()
+        ret
+    end
+
+    // Main prints once a second so the transcript shows whether the audio
+    // thread's println interleaves with another thread's writes.
+    mut s := 0
+    until s < 2:
+        sync.SleepMs(1000)
+        println "[main] heartbeat " + conv.FormatInt((s + 1) as i64) + "s"
+        s = s + 1
+    end
+
+    g_backend = mizrab_ma_backend_name(dev)
+    mizrab_ma_stop(dev)
+    g_mode_print = 0
+    stats_line("M7 callback execution with println every 100", g_exec, samples())
+    println "M7 print-in-callback (--print-in-callback, 10 s shell timeout): callbacks=" + conv.FormatInt(g_count as i64) + " printed=" + conv.FormatInt(g_printed as i64) + " stopped=yes backend=" + g_backend
+end
+
+func main:
+    mut mode := 0
+    mut null_backend := 0
+    args := os.Args()
+    mut i := 1
+    until i < args.len():
+        a := args.get(i)
+        if a == "--measure":
+            mode = 1
+        end
+        if a == "--alloc-in-callback":
+            mode = 2
+        end
+        if a == "--print-in-callback":
+            mode = 3
+        end
+        if a == "--null":
+            null_backend = 1
+        end
+        i = i + 1
+    end
+
+    g_rate = 48000
+    g_channels = 2
+
+    g_entry = mem.AllocateZeroed((CAP as u64) * sizeof(i64)) as i64*
+    g_exec = mem.AllocateZeroed((CAP as u64) * sizeof(i64)) as i64*
+    g_scratch = mem.AllocateZeroed((CAP as u64) * sizeof(i64)) as i64*
+    if g_entry == null or g_exec == null or g_scratch == null:
+        println "measure: sample buffer allocation failed"
+        ret 1
+    end
+
+    dev := mizrab_ma_create(mizrab_measure_fill as void *, g_rate, g_channels, null_backend)
+    if dev == null:
+        println "mizrab_ma_last_error: " + mizrab_ma_last_error()
+        ret 1
+    end
+
+    if mode == 1:
+        measure_mode(dev)
+    end
+    if mode == 2:
+        alloc_mode(dev)
+    end
+    if mode == 3:
+        print_mode(dev)
+    end
+    if mode == 0:
+        if run_pass(dev, 2000) == 0:
+            println "frames=" + conv.FormatUint(g_frames) + " backend=" + g_backend
+            if g_frames == 0:
+                mizrab_ma_destroy(dev)
+                ret 1
+            end
+        end
+    end
+
+    mizrab_ma_destroy(dev)
+    mem.Free(g_entry as void *)
+    mem.Free(g_exec as void *)
+    mem.Free(g_scratch as void *)
+    ret 0
+end
