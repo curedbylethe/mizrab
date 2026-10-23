@@ -72,8 +72,9 @@ func waitSeek():
 end
 
 // Plays `path` on the null device for a short while and checks the facts that
-// hold for every format.
-func endToEnd(path: str, lengthKnown: bool):
+// hold for every format. `wantFrames` is the exact length, or -1 for "any
+// positive length" (0 is asserted when the length is unknown).
+func endToEnd(path: str, lengthKnown: bool, wantFrames: i64):
     testing.AssertTrue(audio.Open(path))
     testing.AssertTrue(audio.Start(true))
     sync.SleepMs(300)
@@ -91,6 +92,13 @@ func endToEnd(path: str, lengthKnown: bool):
     testing.AssertEqInt(s.sampleRate, 48000)
     testing.AssertEqInt(s.channels, 2)
     testing.AssertEqBool(s.lengthKnown, lengthKnown)
+    if lengthKnown == false:
+        testing.AssertEqInt64(s.lengthFrames, 0)
+    else wantFrames >= 0:
+        testing.AssertEqInt64(s.lengthFrames, wantFrames)
+    else:
+        testing.AssertTrue(s.lengthFrames > 0)
+    end
     testing.AssertEqInt64(s.decodeErrors, 0)
     testing.AssertEqInt64(s.seeks, 0)
     audio.Stop()
@@ -109,6 +117,17 @@ func main:
     audio.Stop()
     audio.Close()
 
+    // FillFrames with no engine open writes nothing and does not crash, nor does
+    // a non-positive count or a null buffer.
+    guard := newBuf(64)
+    dirty(guard, 64)
+    audio.FillFrames(guard, 64)
+    testing.AssertFalse(silent(guard, 64))
+    audio.FillFrames(guard, 0)
+    audio.FillFrames(guard, -1)
+    audio.FillFrames(null as f32*, 64)
+    testing.AssertFalse(silent(guard, 64))
+
     // A missing or undecodable file leaves nothing allocated or open.
     testing.AssertFalse(audio.Open("fixtures/missing.wav"))
     testing.AssertFalse(audio.Open("fixtures/README.md"))
@@ -116,10 +135,10 @@ func main:
     testing.AssertFalse(audio.Start(true))
 
     // The whole path, one fixture per format.
-    endToEnd("fixtures/tone.wav", true)
-    endToEnd("fixtures/tone.flac", true)
-    endToEnd("fixtures/tone.mp3", true)
-    endToEnd("fixtures/tone.ogg", false)
+    endToEnd("fixtures/tone.wav", true, 72000)
+    endToEnd("fixtures/tone.flac", true, -1)
+    endToEnd("fixtures/tone.mp3", true, -1)
+    endToEnd("fixtures/tone.ogg", false, 0)
 
     // Direct path. Arm primes the ring to capacity and creates the device
     // without starting it; stopping the producer then freezes the ring at
@@ -135,6 +154,18 @@ func main:
     testing.AssertTrue(before.framesDecoded >= ringFrames)
     testing.AssertEqInt64(before.framesPlayed, 0)
     testing.AssertEqInt64(before.underruns, 0)
+
+    // Misuse with a live ring: zero or negative frames and a null buffer change
+    // nothing.
+    dirty(buf, 8192)
+    audio.FillFrames(buf, 0)
+    audio.FillFrames(buf, -1)
+    audio.FillFrames(null as f32*, 512)
+    testing.AssertFalse(silent(buf, 8192))
+    guarded := audio.ReadStatus()
+    testing.AssertEqInt64(guarded.fillLevel, ringFrames)
+    testing.AssertEqInt64(guarded.framesPlayed, 0)
+    testing.AssertEqInt64(guarded.underruns, 0)
 
     // Pre-filled: frames_played is the sum of the frames requested.
     dirty(buf, 8192)
@@ -165,6 +196,24 @@ func main:
     audio.Close()
     audio.Close()
     testing.AssertEqStr(audio.ReadStatus().backend, "none")
+
+    // After Close the ring is gone: FillFrames is inert again.
+    dirty(guard, 64)
+    audio.FillFrames(guard, 64)
+    testing.AssertFalse(silent(guard, 64))
+    mem.Free(guard as void*)
+
+    // Stop after Arm (device created, never started) still stops the decoder:
+    // a second Arm only succeeds once the first producer is gone. Stop twice is
+    // a no-op. A failed device stop cannot be provoked on the null backend.
+    testing.AssertTrue(audio.Open("fixtures/tone.wav"))
+    testing.AssertTrue(audio.Arm(true))
+    audio.Stop()
+    audio.Stop()
+    testing.AssertFalse(audio.DevIsRunning())
+    testing.AssertTrue(audio.Arm(true))
+    audio.Stop()
+    audio.Close()
 
     // Seek and volume through the engine while the null device drains the
     // ring. The WAV is 72000 frames at 48 kHz, so frame 24000 is valid.
