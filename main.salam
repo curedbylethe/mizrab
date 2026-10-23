@@ -18,6 +18,8 @@ import os
 
 include "commands/commands.salam"
 
+link static "build/miniaudio.o"
+
 func main:
     f := flag.New("mizrab", commands.Usage())
     defer flag.Free(f)
