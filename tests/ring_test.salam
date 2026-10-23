@@ -1,0 +1,181 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the SPSC ring and the metric counters without a device: round trip,
+// wraparound, partial read, full and empty rings, Reset, bad capacities, a
+// two-thread transfer and the counter snapshot.
+
+import mem
+import sync
+import testing
+import thread
+
+include "../audio/ring.salam"
+include "../audio/metrics.salam"
+
+// Producer thread for the transfer test: pushes `total` frames in chunks of
+// 5, sleeping 1 ms on a short write, exactly as the decoder will.
+mut g_ring := ring.Ring {}
+mut g_total := 0
+
+// Frame i carries the pair (base + i, -(base + i)) so order and channel
+// interleaving are both checked.
+func fill(buf: f32*, base: int, frames: int):
+    mut i := 0
+    until i < frames:
+        buf[i * 2] = (base + i) as f32
+        buf[i * 2 + 1] = (0 - (base + i)) as f32
+        i = i + 1
+    end
+end
+
+// Reports whether frames [0, frames) of buf hold the pattern from `base`.
+func check(buf: f32*, base: int, frames: int): bool:
+    mut i := 0
+    until i < frames:
+        if buf[i * 2] != (base + i) as f32 or buf[i * 2 + 1] != (0 - (base + i)) as f32:
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+func newBuf(frames: int): f32*:
+    ret mem.AllocateZeroed((frames * 2 * 4) as u64) as f32*
+end
+
+func producer(_arg: void*):
+    src := newBuf(5)
+    mut sent := 0
+    until sent < g_total:
+        mut off := 0
+        until off < 5:
+            // Refill the unsent tail at the front: a short write is retried
+            // from the first unsent frame.
+            fill(src, sent + off, 5 - off)
+            n := ring.Write(g_ring, src, 5 - off)
+            off = off + n as int
+            if n == 0:
+                sync.SleepMs(1)
+            end
+        end
+        sent = sent + 5
+    end
+    mem.Free(src as void*)
+end
+
+func main:
+    r := ring.New(8)
+    src := newBuf(16)
+    dst := newBuf(16)
+
+    testing.AssertTrue(ring.Valid(r))
+    testing.AssertEqInt64(ring.Capacity(r), 8)
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
+    testing.AssertEqInt64(ring.Read(r, dst, 4), 0)
+
+    // round trip
+    fill(src, 100, 5)
+    testing.AssertEqInt64(ring.Write(r, src, 5), 5)
+    testing.AssertEqInt64(ring.FillLevel(r), 5)
+    testing.AssertEqInt64(ring.Read(r, dst, 5), 5)
+    testing.AssertTrue(check(dst, 100, 5))
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
+
+    // wraparound: write 5 more, so the slots run 5..7 then 0..1
+    fill(src, 200, 5)
+    testing.AssertEqInt64(ring.Write(r, src, 5), 5)
+    testing.AssertEqInt64(ring.Read(r, dst, 5), 5)
+    testing.AssertTrue(check(dst, 200, 5))
+
+    // partial read leaves the rest queued, in order
+    fill(src, 300, 6)
+    testing.AssertEqInt64(ring.Write(r, src, 6), 6)
+    testing.AssertEqInt64(ring.Read(r, dst, 2), 2)
+    testing.AssertTrue(check(dst, 300, 2))
+    testing.AssertEqInt64(ring.FillLevel(r), 4)
+    testing.AssertEqInt64(ring.Read(r, dst, 10), 4)
+    testing.AssertTrue(check(dst, 302, 4))
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
+
+    // full ring: short write, nothing dropped, overrun counted by the caller
+    m := metrics.NewMetrics()
+    fill(src, 400, 10)
+    wrote := ring.Write(r, src, 10)
+    testing.AssertEqInt64(wrote, 8)
+    metrics.AddOverrun(m, 10 - wrote)
+    testing.AssertEqInt64(ring.FillLevel(r), 8)
+    testing.AssertEqInt64(ring.Write(r, src, 1), 0)
+    testing.AssertEqInt64(ring.Read(r, dst, 8), 8)
+    testing.AssertTrue(check(dst, 400, 8))
+
+    // Reset empties
+    fill(src, 500, 3)
+    ring.Write(r, src, 3)
+    ring.Reset(r)
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
+    testing.AssertEqInt64(ring.Read(r, dst, 3), 0)
+
+    // bad capacities are not Valid
+    testing.AssertFalse(ring.Valid(ring.New(0)))
+    testing.AssertFalse(ring.Valid(ring.New(12)))
+    ring.Free(ring.New(6))
+
+    // two threads: 1000 frames in order through a 8-frame ring
+    g_ring = r
+    g_total = 1000
+    t := thread.New(spawn(producer, null))
+    mut got := 0
+    mut ok := true
+    until got < g_total:
+        n := ring.Read(r, dst, 3) as int
+        if n == 0:
+            sync.SleepMs(1)
+        end
+        if check(dst, got, n) == false:
+            ok = false
+        end
+        got = got + n
+    end
+    thread.Join(t)
+    testing.AssertTrue(ok)
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
+
+    // metrics
+    metrics.AddUnderrun(m, 7)
+    metrics.AddDecoded(m, 480)
+    metrics.AddPlayed(m, 240)
+    metrics.AddDecodeError(m)
+    metrics.AddSeek(m)
+    metrics.AddSeek(m)
+    s := metrics.TakeSnapshot(m)
+    testing.AssertEqInt64(s.underruns, 7)
+    testing.AssertEqInt64(s.overruns, 2)
+    testing.AssertEqInt64(s.decoded, 480)
+    testing.AssertEqInt64(s.played, 240)
+    testing.AssertEqInt64(s.decodeErrors, 1)
+    testing.AssertEqInt64(s.seeks, 2)
+    metrics.ResetMetrics(m)
+    testing.AssertEqInt64(metrics.TakeSnapshot(m).underruns, 0)
+    metrics.AddUnderrun(m, 1)
+    testing.AssertEqInt64(s.underruns, 7)
+
+    metrics.FreeMetrics(m)
+    ring.Free(r)
+    mem.Free(src as void*)
+    mem.Free(dst as void*)
+    ret testing.Summary()
+end
