@@ -45,7 +45,9 @@ pub struct Snapshot:
 end
 
 @en "NewMetrics"
-/// Allocates the counters, all zero.
+/// Allocates the counters, all zero. There is no failure result:
+/// atomic.NewI64 does not null-check its allocation, so an out-of-memory
+/// counter crashes inside it.
 pub func NewMetrics(): Metrics:
     ret Metrics {
         underruns = atomic.NewI64(0), overruns = atomic.NewI64(0), decoded = atomic.NewI64(0),

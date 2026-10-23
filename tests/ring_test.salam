@@ -119,8 +119,10 @@ func main:
     metrics.AddOverrun(m, 10 - wrote)
     testing.AssertEqInt64(ring.FillLevel(r), 8)
     testing.AssertEqInt64(ring.Write(r, src, 1), 0)
+    testing.AssertEqInt64(ring.FillLevel(r), 8)
     testing.AssertEqInt64(ring.Read(r, dst, 8), 8)
     testing.AssertTrue(check(dst, 400, 8))
+    testing.AssertEqInt64(ring.FillLevel(r), 0)
 
     // Reset empties
     fill(src, 500, 3)
@@ -132,6 +134,11 @@ func main:
     // bad capacities are not Valid
     testing.AssertFalse(ring.Valid(ring.New(0)))
     testing.AssertFalse(ring.Valid(ring.New(12)))
+    testing.AssertFalse(ring.Valid(ring.Ring {}))
+    // a buffer without cells is not Valid either
+    nocell := newBuf(2)
+    testing.AssertFalse(ring.Valid(ring.Ring { buf = nocell, capacity = 1, mask = 0 }))
+    mem.Free(nocell as void*)
     ring.Free(ring.New(6))
 
     // two threads: 1000 frames in order through a 8-frame ring
