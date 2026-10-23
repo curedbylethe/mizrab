@@ -1,0 +1,230 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the controller end to end on miniaudio's null backend: rejected
+// commands, failure classification, position and duration, pause and resume,
+// volume, seek and the end of a track. The null backend is paced by the wall
+// clock, so the only waits are bounded polls (a few seconds at most each) on
+// frame counters, and no assertion needs an exact time.
+
+import fs.file
+import os
+import sync
+import testing
+import time
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+include "../player/player.salam"
+
+// One buffer: the engine's ring, 16384 frames at 48 kHz, in milliseconds.
+bufferMs := 341 as i64
+
+func inState(name: str):
+    testing.AssertEqStr(player.StateName(player.CurrentState()), name)
+end
+
+// A command that must be refused: false, the state unchanged, BadArgument.
+func refused(got: bool, name: str):
+    testing.AssertFalse(got)
+    inState(name)
+    testing.AssertEqStr(player.TextFor(player.LastError()), "invalid command argument")
+    testing.AssertEqStr(player.LastErrorDetail(), "command not allowed in state " + name)
+end
+
+// A Play that must fail: false, state error, `text` and no file left open.
+func failedPlay(path: str, text: str):
+    testing.AssertFalse(player.Play(path))
+    inState("error")
+    testing.AssertEqStr(player.LastErrorText(), text)
+    testing.AssertEqInt64(audio.ReadStatus().fillCapacity, 0)
+    testing.AssertEqStr(player.CurrentPath(), "")
+end
+
+// Waits up to three seconds for the position to pass `ms`.
+func waitPast(ms: i64):
+    mut n := 0
+    until player.PositionMs() <= ms and n < 3000:
+        sync.SleepMs(1)
+        n = n + 1
+    end
+    testing.AssertTrue(player.PositionMs() > ms)
+end
+
+// Waits up to three seconds for the seek in flight to land.
+func waitSeek():
+    mut n := 0
+    until audio.DecoderSeekPending() and n < 3000:
+        sync.SleepMs(1)
+        n = n + 1
+    end
+    testing.AssertFalse(audio.DecoderSeekPending())
+end
+
+func playing(): bool:
+    ret player.CurrentState() == player.State.Playing
+end
+
+func absDiff(a: i64, b: i64): i64:
+    if a > b:
+        ret a - b
+    end
+    ret b - a
+end
+
+func main:
+    // A fresh player: idle, full volume, no position, no duration.
+    player.Init(true)
+    inState("idle")
+    testing.AssertEqInt(player.GetVolume(), 100)
+    testing.AssertEqInt64(player.PositionMs(), -1)
+    testing.AssertEqInt64(player.DurationMs(), -1)
+    testing.AssertEqStr(player.CurrentPath(), "")
+    testing.AssertEqStr(player.LastErrorText(), "")
+
+    // Nothing to pause, resume, seek or stop in idle.
+    refused(player.Pause(), "idle")
+    refused(player.Resume(), "idle")
+    refused(player.Toggle(), "idle")
+    refused(player.Seek(1), "idle")
+    refused(player.Stop(), "idle")
+
+    // Volume is stored without a device, range checked, and applied later.
+    testing.AssertFalse(player.SetVolume(101))
+    testing.AssertEqStr(player.LastErrorText(), "invalid command argument")
+    testing.AssertFalse(player.SetVolume(-1))
+    testing.AssertEqInt(player.GetVolume(), 100)
+    testing.AssertTrue(player.SetVolume(55))
+    testing.AssertEqInt(player.GetVolume(), 55)
+    inState("idle")
+
+    // Failures are classified, leave the state error and no file open.
+    failedPlay("", "invalid command argument")
+    failedPlay("fixtures/missing.wav", "file not found")
+    testing.AssertEqStr(player.LastErrorDetail(), "fixtures/missing.wav")
+    failedPlay("fixtures", "file not found")
+    testing.AssertEqStr(player.LastErrorDetail(), "not a file")
+    failedPlay("fixtures/README.md", "unsupported audio format")
+    os.WriteFile("../build/tests/garbage.wav", "this is not audio")
+    failedPlay("../build/tests/garbage.wav", "could not decode this file")
+    testing.AssertTrue(player.LastErrorDetail().len() > 0)
+    os.WriteFile("../build/tests/locked.wav", "x")
+    file.Chmod("../build/tests/locked.wav", 0)
+    failedPlay("../build/tests/locked.wav", "permission denied")
+    file.Chmod("../build/tests/locked.wav", 420)
+    os.Remove("../build/tests/locked.wav")
+    os.Remove("../build/tests/garbage.wav")
+    testing.AssertEqStr(player.LastErrorDetail(), "../build/tests/locked.wav")
+    refused(player.Seek(1), "error")
+
+    // A good file: playing, a duration of 72000 frames, a position inside it,
+    // and the volume asked for before there was a device.
+    testing.AssertTrue(player.Play("fixtures/tone.wav"))
+    inState("playing")
+    testing.AssertEqStr(player.LastErrorText(), "")
+    testing.AssertEqStr(player.CurrentPath(), "fixtures/tone.wav")
+    testing.AssertEqInt64(player.DurationMs(), 1500)
+    testing.AssertTrue(player.PositionMs() >= 0 and player.PositionMs() <= 1500)
+    testing.AssertEqInt(audio.GetVolume(), 55)
+    refused(player.Resume(), "playing")
+    testing.AssertTrue(player.SetVolume(30))
+    testing.AssertEqInt(audio.GetVolume(), 30)
+
+    // Pause and resume through toggle: the position holds while paused and
+    // never goes backwards.
+    waitPast(100)
+    before := player.PositionMs()
+    testing.AssertTrue(player.Toggle())
+    inState("paused")
+    held := player.PositionMs()
+    testing.AssertTrue(held >= before)
+    refused(player.Pause(), "paused")
+    refused(player.Seek(1), "paused")
+    sync.SleepMs(60)
+    testing.AssertEqInt64(player.PositionMs(), held)
+    testing.AssertTrue(player.Toggle())
+    inState("playing")
+    waitPast(held)
+    testing.AssertTrue(player.PositionMs() >= held)
+    testing.AssertTrue(player.Pause())
+    testing.AssertTrue(player.Resume())
+    inState("playing")
+
+    // Seek to one second: the position lands within one buffer of it.
+    testing.AssertFalse(player.Seek(-1))
+    testing.AssertEqStr(player.LastErrorDetail(), "negative seek")
+    inState("playing")
+    testing.AssertTrue(player.Seek(1))
+    inState("playing")
+    waitSeek()
+    sync.SleepMs(50)
+    testing.AssertTrue(absDiff(player.PositionMs(), 1000) <= bufferMs)
+    testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
+
+    // Stop releases the file.
+    testing.AssertTrue(player.Stop())
+    inState("stopped")
+    testing.AssertEqStr(player.CurrentPath(), "")
+    testing.AssertEqInt64(player.PositionMs(), -1)
+    testing.AssertEqInt64(player.DurationMs(), -1)
+    testing.AssertEqStr(player.LastErrorText(), "")
+    refused(player.Stop(), "stopped")
+    refused(player.Toggle(), "stopped")
+
+    // Ogg has no known length, but it still has a position.
+    testing.AssertTrue(player.Play("fixtures/tone.ogg"))
+    testing.AssertEqInt64(player.DurationMs(), -1)
+    testing.AssertTrue(player.PositionMs() >= 0)
+    testing.AssertTrue(player.Play("fixtures/tone.flac"))
+    testing.AssertTrue(player.DurationMs() > 0)
+    testing.AssertTrue(player.Stop())
+
+    // The end of a track: Tick sees the stream drain and the state becomes
+    // ended. Seeking to one second leaves half a second to play.
+    testing.AssertTrue(player.Play("fixtures/tone.wav"))
+    testing.AssertTrue(player.Seek(1))
+    deadline := time.MonoMillis() + 3000
+    until playing() and time.MonoMillis() < deadline:
+        sync.SleepMs(5)
+        player.Tick(time.MonoMillis())
+    end
+    inState("ended")
+    testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
+    testing.AssertTrue(player.PositionMs() >= 1400 and player.PositionMs() <= 1500)
+    refused(player.Seek(1), "ended")
+
+    // Toggle replays an ended track; Stop leaves ended.
+    testing.AssertTrue(player.Toggle())
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), "fixtures/tone.wav")
+    testing.AssertTrue(player.Stop())
+    inState("stopped")
+
+    // Reset closes the engine and returns to idle.
+    testing.AssertTrue(player.Play("fixtures/tone.wav"))
+    player.Reset()
+    inState("idle")
+    testing.AssertEqInt64(audio.ReadStatus().fillCapacity, 0)
+    testing.AssertEqStr(player.CurrentPath(), "")
+    ret testing.Summary()
+end
