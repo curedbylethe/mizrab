@@ -30,6 +30,7 @@
         "group": "Findings",
         "pages": [
           "audio-engine",
+          "playback-controller",
           "spike-miniaudio"
         ]
       }
