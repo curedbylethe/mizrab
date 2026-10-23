@@ -82,7 +82,7 @@ $(MINIAUDIO_OBJ): $(MINIAUDIO_DIR)/miniaudio.c $(MINIAUDIO_DIR)/miniaudio.h $(MI
 	@mkdir -p $(BUILD)
 	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
 
-$(SHIM_OBJ): spike/ma_shim.c spike/ma_shim.h $(MINIAUDIO_DIR)/miniaudio.h
+$(SHIM_OBJ): $(MINIAUDIO_DIR)/ma_shim.c $(MINIAUDIO_DIR)/ma_shim.h $(MINIAUDIO_DIR)/miniaudio.h
 	@mkdir -p $(BUILD)
 	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
 
