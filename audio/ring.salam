@@ -1,0 +1,152 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Lock-free single-producer/single-consumer ring of interleaved stereo f32
+// frames. Capacity is a power of two, in frames; the buffer holds capacity * 2
+// floats. `wr` and `rd` are monotonic frame counters and the slot of frame n
+// is n & mask, so the fill level is wr - rd. At 48 kHz an i64 counter does not
+// wrap in any practical lifetime.
+//
+// Allocation rule: New allocates the buffer and the two cells and Free
+// releases them. Write, Read and FillLevel never allocate, log or lock, which
+// is what makes them safe in the audio callback.
+//
+// Ordering: std/atomic offers i64 cells only and every operation is seq_cst,
+// with no fence and no ordering parameter. seq_cst is stronger than the
+// SPSC publish/consume pair needs, so correctness holds; what is missing is
+// tuning (relaxed/acquire/release), a fence and widths other than 64 bits.
+// Caveat: under the tcc backend std/atomic falls back to a mutex per cell, so
+// the lock-free property holds for the llvm backend only.
+//
+// Policies: a short Write means "ring full"; the producer retries the
+// remainder later and no frame is dropped or overwritten. Read returns what
+// is available; the consumer zero-fills the rest and counts the underrun.
+
+package audio
+
+import atomic
+import mem
+
+@en "Ring"
+/// A fixed-capacity SPSC ring of interleaved stereo f32 frames.
+pub struct Ring:
+    pub buf: f32* = null
+    pub capacity: i64 = 0
+    pub mask: i64 = 0
+    pub wr: atomic.I64 = atomic.I64 {}
+    pub rd: atomic.I64 = atomic.I64 {}
+end
+
+@en "New"
+/// Allocates a ring of `frames` stereo frames. `frames` must be a power of two
+/// greater than zero. On a bad size or an allocation failure the result is
+/// not Valid.
+pub func New(frames: i64): Ring:
+    if frames <= 0 or (frames & (frames - 1)) != 0:
+        ret Ring {}
+    end
+    buf := mem.AllocateZeroed((frames * 2 * 4) as u64) as f32*
+    if buf == null:
+        ret Ring {}
+    end
+    ret Ring {
+        buf = buf, capacity = frames, mask = frames - 1, wr = atomic.NewI64(0), rd = atomic.NewI64(0),
+    }
+end
+
+@en "Free"
+/// Releases the buffer and the cells of a Valid ring. Call it once, after
+/// both threads have stopped.
+pub func Free(r: Ring):
+    if Valid(r):
+        mem.Free(r.buf as void*)
+        atomic.DestroyI64(r.wr)
+        atomic.DestroyI64(r.rd)
+    end
+end
+
+@en "Valid"
+/// Reports whether New produced a usable ring.
+pub func Valid(r: Ring): bool:
+    ret r.buf != null
+end
+
+@en "Capacity"
+/// The ring capacity in frames.
+pub func Capacity(r: Ring): i64:
+    ret r.capacity
+end
+
+@en "FillLevel"
+/// The number of frames written and not yet read.
+pub func FillLevel(r: Ring): i64:
+    ret atomic.Load(r.wr) - atomic.Load(r.rd)
+end
+
+@en "Write"
+/// Producer side. Copies as many whole frames from `src` (interleaved stereo
+/// f32) as fit and returns the count. A result below `frames` means the ring
+/// is full.
+pub func Write(r: Ring, src: f32*, frames: i64): i64:
+    w := atomic.Load(r.wr)
+    free := r.capacity - (w - atomic.Load(r.rd))
+    mut n := frames
+    if n > free:
+        n = free
+    end
+    if n <= 0:
+        ret 0
+    end
+    mut i := 0 as i64
+    until i < n:
+        slot := ((w + i) & r.mask) * 2
+        r.buf[slot] = src[i * 2]
+        r.buf[slot + 1] = src[i * 2 + 1]
+        i = i + 1
+    end
+    atomic.Store(r.wr, w + n)
+    ret n
+end
+
+@en "Read"
+/// Consumer side. Copies up to `frames` available frames into `dst` and
+/// returns the count. A result below `frames` means the ring ran dry.
+pub func Read(r: Ring, dst: f32*, frames: i64): i64:
+    rd := atomic.Load(r.rd)
+    mut n := atomic.Load(r.wr) - rd
+    if n > frames:
+        n = frames
+    end
+    if n <= 0:
+        ret 0
+    end
+    mut i := 0 as i64
+    until i < n:
+        slot := ((rd + i) & r.mask) * 2
+        dst[i * 2] = r.buf[slot]
+        dst[i * 2 + 1] = r.buf[slot + 1]
+        i = i + 1
+    end
+    atomic.Store(r.rd, rd + n)
+    ret n
+end
+
+@en "Reset"
+/// Empties the ring. Only legal while no thread touches it: before Start or
+/// after a full Stop.
+pub func Reset(r: Ring):
+    atomic.Store(r.rd, 0)
+    atomic.Store(r.wr, 0)
+end
