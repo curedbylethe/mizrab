@@ -17,9 +17,8 @@ MINIAUDIO_DIR := audio
 MINIAUDIO_OBJ := $(BUILD)/miniaudio.o
 SHIM_OBJ := $(BUILD)/ma_shim.o
 SPIKE_MEASURE_BIN := $(BUILD)/spike-measure
-MINIAUDIO_DEFS := -DMA_NO_DECODING -DMA_NO_ENCODING -DMA_NO_WAV -DMA_NO_FLAC \
-	-DMA_NO_MP3 -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER -DMA_NO_NODE_GRAPH \
-	-DMA_NO_ENGINE
+MINIAUDIO_DEFS := -DMA_NO_ENCODING -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER \
+	-DMA_NO_NODE_GRAPH -DMA_NO_ENGINE
 
 # Salam links with the host toolchain on macOS. Pin the deployment target to
 # the running OS so the linker does not warn about mismatched SDK versions.
@@ -46,7 +45,7 @@ help:
 	@echo "make spike-measure print the STAGE-03 measurement table (M1-M8, real device)"
 	@echo "Salam $(SALAM_VERSION)"
 
-build:
+build: $(MINIAUDIO_OBJ)
 	@mkdir -p $(BUILD)
 	$(SALAM) build $(ENTRY) --output=$(BIN) $(FLAGS)
 
@@ -79,7 +78,7 @@ clean:
 # The objects are linked by path from spike/tone.salam. The compiler checks the
 # path relative to the source file but hands it to the linker from the current
 # directory, so the build runs from spike/ and the source says ../$(BUILD).
-$(MINIAUDIO_OBJ): $(MINIAUDIO_DIR)/miniaudio.c $(MINIAUDIO_DIR)/miniaudio.h
+$(MINIAUDIO_OBJ): $(MINIAUDIO_DIR)/miniaudio.c $(MINIAUDIO_DIR)/miniaudio.h $(MINIAUDIO_DIR)/stb_vorbis.c
 	@mkdir -p $(BUILD)
 	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
 
