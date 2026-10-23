@@ -56,7 +56,7 @@ mut engArmed := false
 
 @en "Status"
 /// A plain-value picture of the engine at one moment. ReadStatus fills it from
-/// atomic loads only.
+/// atomic loads only, on the control thread.
 pub struct Status:
     pub underruns: i64 = 0
     pub overruns: i64 = 0
@@ -142,9 +142,15 @@ pub func Start(null_backend: bool): bool:
 end
 
 @en "Stop"
-/// Stops the device, then the decoder thread (joined). The file stays open.
+/// Stops the device, then the decoder thread (joined). The file stays open. If
+/// the device is running and fails to stop, nothing else is stopped, so the live
+/// callback keeps being fed.
 pub func Stop():
-    DevStop()
+    // DevStop is false for "no device" too; bail only when the device is still
+    // running, so a live callback keeps its producer.
+    if DevStop() == false and DevIsRunning():
+        ret
+    end
     DecoderStop()
     engArmed = false
 end
@@ -189,9 +195,10 @@ end
 
 @en "ReadStatus"
 /// Reads the engine status. Atomic loads only: it does not allocate, lock or
-/// format, and may be called from any thread while the engine runs. The
-/// backend name is a borrowed static string. Without an open file every field
-/// is zero and the backend is "none".
+/// format. Control thread only: it must not race Open or Close, which free the
+/// cells it reads (a generation counter checked before and after the read would
+/// allow another thread later). The backend name is a borrowed static string.
+/// Without an open file every field is zero and the backend is "none".
 pub func ReadStatus(): Status:
     if engOpen == false:
         ret Status {}

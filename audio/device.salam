@@ -74,8 +74,12 @@ end
 @en "FillFrames"
 /// Fills `frames` interleaved stereo f32 frames at `out`: drains the ring,
 /// zeroes the rest and counts the shortfall as underrun frames. The audio
-/// callback delegates here; tests may call it directly. Real-time safe.
+/// callback delegates here; tests may call it directly. Real-time safe. Does
+/// nothing for a null `out`, a non-positive `frames` or when no device is open.
 pub func FillFrames(out: f32*, frames: i64):
+    if out == null or frames <= 0 or Valid(devRing) == false:
+        ret
+    end
     mem.Set(out as void*, 0, (frames * devChannels * 4) as u64)
     got := Read(devRing, out, frames)
     if got < frames:
