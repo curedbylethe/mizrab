@@ -9,7 +9,8 @@ the [Salam](https://github.com/SalamLang/Salam) programming language.
 > exercise it ([the engine](https://mizrab.mintlify.app/audio-engine)). The
 > binary does not use it yet: it answers `--version` and `--help` and prints its
 > usage when invoked bare. There is no playback command, no library scanning and
-> no user interface; the first playable build is a later issue.
+> no user interface; the first playable build arrives when the command line
+> gains a play command.
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists. -->

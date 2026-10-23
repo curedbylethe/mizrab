@@ -50,7 +50,7 @@ The two objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.
 | --- | --- | --- |
 | `make soak` | `make build`, then `sh tests/soak.sh` | push one hour of frames through the audio engine on a virtual clock and check the frame count and memory |
 
-`make soak` is opt-in: it is not part of `make test` and CI does not run it. It generates a 28.8 MB WAV under `build/soak/`, ran in 18 to 19 seconds on the recorded macOS runs, and uses a virtual clock, so it makes no wall-clock or device-cadence claim. See [the audio engine](/audio-engine#soak) for the recorded result.
+`make soak` is opt-in: it is not part of `make test` and CI does not run it. It generates a 28.8 MB WAV under `build/soak/`, fails if its sha256 differs from the recorded source hash, ran in 16 to 17 seconds on the recorded macOS runs, and uses a virtual clock, so it makes no wall-clock or device-cadence claim. See [the audio engine](/audio-engine#soak) for the recorded result.
 
 ## Run the harness directly
 
