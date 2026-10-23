@@ -20,6 +20,7 @@
 // consumer and drains the ring itself. Lossy formats assert only a lower bound
 // on the frame count.
 
+import conv
 import mem
 import sync
 import testing
@@ -41,9 +42,13 @@ wavFrames := 72000 as i64
 // After a seek to T (a multiple of 6) the resampler restarts from silence and
 // its first 91 frames are filter warm-up; from there the stream equals the
 // reference from T + 6 (the restart eats one input frame = 6 output frames).
-// Measured against a straight decode of the fixture, exact in every f32.
+// Measured against a straight decode of the fixture: bit-exact on macOS arm64,
+// but the filter's decaying tail differs in the last bits on Linux x86_64, so
+// the post-seek comparison allows seekTol. A one-frame misalignment of the
+// fixture's tone differs by about 0.03, far above it.
 seekLead := 6 as i64
 seekWarm := 100 as i64
+seekTol := 0.001 as f32
 
 func newBuf(frames: i64): f32*:
     ret mem.AllocateZeroed((frames * 2 * 4) as u64) as f32*
@@ -73,6 +78,28 @@ end
 
 // Reports whether frames [0, frames) of `got` equal frames [0, frames) of
 // `want`.
+// Reports whether frames [from, from + frames) of `got` match frames
+// [at, at + frames) of `want` to within seekTol. Prints the worst difference
+// when they do not, since the harness shows only the failed assertion.
+func closeAt(got: f32*, from: i64, want: f32*, at: i64, frames: i64): bool:
+    mut worst := 0.0 as f32
+    mut i := 0 as i64
+    until i < frames * 2:
+        mut d := got[from * 2 + i] - want[at * 2 + i]
+        if d < 0.0 as f32:
+            d = 0.0 as f32 - d
+        end
+        if d > worst:
+            worst = d
+        end
+        i = i + 1
+    end
+    if worst > seekTol:
+        println "closeAt: worst difference (millionths) " + conv.FormatInt((worst * 1000000.0 as f32) as i64) + " at frame " + conv.FormatInt(at)
+    end
+    ret worst <= seekTol
+end
+
 func same(got: f32*, want: f32*, frames: i64): bool:
     ret sameAt(got, 0, want, 0, frames)
 end
@@ -177,7 +204,7 @@ func doubleSeek(ref: f32*):
     testing.AssertFalse(audio.DecoderSeekPending())
     waitLevel(r, 512)
     testing.AssertEqInt64(audio.Read(r, tmp, 512), 512)
-    testing.AssertTrue(sameAt(tmp, seekWarm, ref, 48000 + seekLead + seekWarm, 512 - seekWarm))
+    testing.AssertTrue(closeAt(tmp, seekWarm, ref, 48000 + seekLead + seekWarm, 512 - seekWarm))
     testing.AssertTrue(audio.DecoderFramesDecoded() >= 48512)
     testing.AssertEqInt64(audio.TakeSnapshot(m).seeks, 1)
     testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 0)
@@ -336,7 +363,7 @@ func main:
     // Silence first (the resampler restarts), then the reference from the
     // target on, six frames in.
     testing.AssertTrue(tmp[0] == 0.0 as f32 and tmp[1] == 0.0 as f32)
-    testing.AssertTrue(sameAt(tmp, seekWarm, ref, 24000 + seekLead + seekWarm, 512 - seekWarm))
+    testing.AssertTrue(closeAt(tmp, seekWarm, ref, 24000 + seekLead + seekWarm, 512 - seekWarm))
     testing.AssertTrue(audio.DecoderFramesDecoded() >= 24512)
     testing.AssertEqInt64(audio.TakeSnapshot(m).seeks, 1)
     testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 0)
