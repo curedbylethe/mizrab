@@ -13,6 +13,195 @@
  *
  */
 
-// Entry file of the audio package; stage 05 adds the public engine API here.
+// The engine: one public entry point over the decoder, the ring and the device.
+// Package audio is every audio/*.salam file merged; this file adds the verbs
+// and the status snapshot on top of them and nothing else.
+//
+// Order of operations (control thread only):
+//   Open   allocate the ring (16384 frames, a power of two: about 340 ms at
+//          48 kHz) and the metrics, open the file in the decoder.
+//   Start  prime the ring and spawn the decoder thread, create the device,
+//          start its callback.
+//   Stop   stop the device, then stop the decoder (joins its thread).
+//   Close  destroy the device, close the decoder, free the ring and metrics.
+//          Idempotent; safe at any point after or without Open.
+// Teardown is always consumer first, then producer, and every thread is
+// joined before the ring or the metrics are freed. A failed Start unwinds
+// whatever it created. Seek needs the callback running: the decoder waits for
+// the consumer to drain the ring before it seeks.
+//
+// Singleton ceiling: the decoder and the device keep their state in package
+// globals and the shim in C statics, so exactly one file is open at a time.
+// The engine owns the ring and the metrics it allocates in Open (package
+// globals prefixed eng).
+//
+// Rate policy (O4): decoder and device are pinned to f32 / 2 ch / 48000 Hz and
+// miniaudio converts. Status reports the rate and channels the device was
+// opened with (the configured values, not a read-back from the backend), so a
+// consumer can see what the engine runs at.
+//
+// Scope: the engine adds no play, pause, queue, next or previous verbs and no
+// error strings; those belong to the playback controller. FillFrames (the audio callback's body)
+// lives in device.salam and is public.
 
 package audio
+
+const engRingFrames := 16384 as i64
+
+mut engRing := Ring {}
+mut engMetrics := Metrics {}
+mut engOpen := false
+mut engDevice := false
+mut engArmed := false
+
+@en "Status"
+/// A plain-value picture of the engine at one moment. ReadStatus fills it from
+/// atomic loads only.
+pub struct Status:
+    pub underruns: i64 = 0
+    pub overruns: i64 = 0
+    pub framesDecoded: i64 = 0
+    pub framesPlayed: i64 = 0
+    pub decodeErrors: i64 = 0
+    pub seeks: i64 = 0
+    pub fillLevel: i64 = 0
+    pub fillCapacity: i64 = 0
+    pub sampleRate: int = 0
+    pub channels: int = 0
+    pub lengthFrames: i64 = 0
+    pub lengthKnown: bool = false
+    pub atEnd: bool = false
+    pub backend: str = "none"
+end
+
+@en "Open"
+/// Opens `path` for playback: allocates the ring and the metrics and opens the
+/// decoder. Returns false if a file is already open, on an allocation failure
+/// or if the file cannot be decoded (DecoderLastError says why); nothing stays
+/// allocated on failure.
+pub func Open(path: str): bool:
+    if engOpen:
+        ret false
+    end
+    r := New(engRingFrames)
+    if Valid(r) == false:
+        ret false
+    end
+    m := NewMetrics()
+    if DecoderOpen(path) == false:
+        FreeMetrics(m)
+        Free(r)
+        ret false
+    end
+    engRing = r
+    engMetrics = m
+    engOpen = true
+    ret true
+end
+
+@en "Arm"
+/// Everything Start does except starting the device callback: primes the ring,
+/// spawns the decoder thread and creates the device. Meant for tests, which
+/// then stop the producer (DecoderStop) and drive FillFrames by hand; Stop and
+/// Close undo it. Returns false if nothing is open, it is already armed, or
+/// the decoder or device fails (nothing stays running).
+pub func Arm(null_backend: bool): bool:
+    if engOpen == false or engArmed:
+        ret false
+    end
+    if DecoderStart(engRing, engMetrics) == false:
+        ret false
+    end
+    if engDevice == false:
+        if DevCreate(engRing, engMetrics, null_backend) == false:
+            DecoderStop()
+            ret false
+        end
+        engDevice = true
+    end
+    engArmed = true
+    ret true
+end
+
+@en "Start"
+/// Starts playback of the open file: Arm, then the device callback.
+/// `null_backend` selects miniaudio's null backend (no hardware, wall-clock
+/// paced). Returns false on failure and leaves nothing running.
+pub func Start(null_backend: bool): bool:
+    if Arm(null_backend) == false:
+        ret false
+    end
+    if DevStart() == false:
+        DevDestroy()
+        DecoderStop()
+        engDevice = false
+        engArmed = false
+        ret false
+    end
+    ret true
+end
+
+@en "Stop"
+/// Stops the device, then the decoder thread (joined). The file stays open.
+pub func Stop():
+    DevStop()
+    DecoderStop()
+    engArmed = false
+end
+
+@en "Close"
+/// Stops everything and releases the device, decoder, ring and metrics.
+/// Idempotent.
+pub func Close():
+    if engOpen == false:
+        ret
+    end
+    DevDestroy()
+    DecoderClose()
+    FreeMetrics(engMetrics)
+    Free(engRing)
+    engMetrics = Metrics {}
+    engRing = Ring {}
+    engOpen = false
+    engDevice = false
+    engArmed = false
+end
+
+@en "Seek"
+/// Requests a seek to output frame `frame`; poll DecoderSeekPending. The
+/// callback must be running to drain the ring, or the seek waits for it.
+/// Returns false if not started or the target is invalid.
+pub func Seek(frame: i64): bool:
+    ret DecoderSeek(frame)
+end
+
+@en "SetVolume"
+/// Sets the master volume, 0-100 (clamped). False without a device.
+pub func SetVolume(percent: int): bool:
+    ret DevSetVolume(percent)
+end
+
+@en "GetVolume"
+/// The master volume as 0-100, or -1 without a device.
+pub func GetVolume(): int:
+    ret DevGetVolume()
+end
+
+@en "ReadStatus"
+/// Reads the engine status. Atomic loads only: it does not allocate, lock or
+/// format, and may be called from any thread while the engine runs. The
+/// backend name is a borrowed static string. Without an open file every field
+/// is zero and the backend is "none".
+pub func ReadStatus(): Status:
+    if engOpen == false:
+        ret Status {}
+    end
+    s := TakeSnapshot(engMetrics)
+    ret Status {
+        underruns = s.underruns, overruns = s.overruns, framesDecoded = s.decoded, framesPlayed = s.played,
+        decodeErrors = s.decodeErrors, seeks = s.seeks, fillLevel = FillLevel(engRing),
+        fillCapacity = Capacity(engRing), sampleRate = DevSampleRate(), channels = DevChannels(),
+        lengthFrames = DecoderLengthFrames(), lengthKnown = DecoderLengthKnown(), atEnd = DecoderAtEnd(),
+        backend = DevBackendName(),
+    }
+end
