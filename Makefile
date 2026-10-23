@@ -45,7 +45,7 @@ help:
 	@echo "make spike-measure print the STAGE-03 measurement table (M1-M8, real device)"
 	@echo "Salam $(SALAM_VERSION)"
 
-build: $(MINIAUDIO_OBJ)
+build: $(MINIAUDIO_OBJ) $(SHIM_OBJ)
 	@mkdir -p $(BUILD)
 	$(SALAM) build $(ENTRY) --output=$(BIN) $(FLAGS)
 
