@@ -3,11 +3,15 @@
 mizrab is a music player built on basalam: a terminal application written in
 the [Salam](https://github.com/SalamLang/Salam) programming language.
 
-> **Status: audio engine, no player yet.** The audio engine exists: it decodes
-> MP3, FLAC, WAV and OGG, streams them through a lock-free ring buffer to
-> miniaudio's playback callback, and runs headless on miniaudio's null backend, where its tests
-> exercise it ([the engine](https://mizrab.mintlify.app/audio-engine)). The
-> binary does not use it yet: it answers `--version` and `--help` and prints its
+> **Status: audio engine and playback controller, no player yet.** The audio
+> engine exists: it decodes MP3, FLAC, WAV and OGG, streams them through a
+> lock-free ring buffer to miniaudio's playback callback, and runs headless on
+> miniaudio's null backend, where its tests exercise it
+> ([the engine](https://mizrab.mintlify.app/audio-engine)). The playback
+> controller above it exists too: states, commands, position, a queue and error
+> text, tested the same way
+> ([the controller](https://mizrab.mintlify.app/playback-controller)). The
+> binary uses neither yet: it answers `--version` and `--help` and prints its
 > usage when invoked bare. There is no playback command, no library scanning and
 > no user interface; the first playable build arrives when the command line
 > gains a play command.
@@ -81,13 +85,14 @@ including `make help` and the opt-in `make soak`.
 The player binary currently imports only the Salam standard library (`flag`,
 `os`) plus its own `commands` package; the basalam include arrives with the
 application layer. The audio engine additionally uses `atomic`, `mem`, `sync`
-and `thread`, and is exercised by the tests, not by the binary.
+and `thread`, and is exercised by the tests, not by the binary. The `player`
+package is tested headlessly and is not yet included by the binary.
 
 ## Repository layout
 
 `main.salam` is the entry point, `commands/` the command layer, `audio/` the
-vendored miniaudio and stb_vorbis plus the decode/ring/device engine, and
-`tests/` the harness and its audio fixtures.
+vendored miniaudio and stb_vorbis plus the decode/ring/device engine, `player/`
+the playback controller, and `tests/` the harness and its audio fixtures.
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
 every directory, including the reserved application-layer packages.
 
