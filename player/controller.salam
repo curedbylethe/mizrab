@@ -28,6 +28,10 @@ import os
 
 include "../audio/audio.salam"
 
+// Everything the engine hands over is 48000 Hz (see audio.salam), so a frame
+// count converts to milliseconds with this one rate.
+const playerRate := 48000 as i64
+
 mut playerCurrent := ""
 mut playerDecodeBase := 0 as i64
 
@@ -92,6 +96,19 @@ func startDevice(): bool:
     ret false
 end
 
+func pauseNow():
+    playerState = State.Paused
+    audio.Stop()
+end
+
+func resumeNow(): bool:
+    if startDevice() == false:
+        ret fail()
+    end
+    playerState = State.Playing
+    ret true
+end
+
 @en "Play"
 /// Opens and starts `path`, replacing whatever was playing. On failure the
 /// state is error, the last error says why and no file stays open.
@@ -114,4 +131,128 @@ pub func Play(path: str): bool:
     audio.SetVolume(playerVolume)
     playerState = State.Playing
     ret true
+end
+
+@en "Pause"
+/// Pauses playback. The file stays open and no audio is lost.
+pub func Pause(): bool:
+    if NextState(playerState, Command.Pause).allowed == false:
+        ret reject()
+    end
+    pauseNow()
+    ret true
+end
+
+@en "Resume"
+/// Resumes a paused track where it stopped.
+pub func Resume(): bool:
+    if NextState(playerState, Command.Resume).allowed == false:
+        ret reject()
+    end
+    ret resumeNow()
+end
+
+@en "Toggle"
+/// Pauses a playing track, resumes a paused one and replays an ended one.
+pub func Toggle(): bool:
+    if NextState(playerState, Command.Toggle).allowed == false:
+        ret reject()
+    end
+    if playerState == State.Playing:
+        pauseNow()
+        ret true
+    end
+    if playerState == State.Paused:
+        ret resumeNow()
+    end
+    ret Play(playerCurrent)
+end
+
+@en "Stop"
+/// Stops playback and releases the file. Position and duration become -1.
+pub func Stop(): bool:
+    if NextState(playerState, Command.Stop).allowed == false:
+        ret reject()
+    end
+    audio.Stop()
+    audio.Close()
+    playerCurrent = ""
+    clearError()
+    playerState = State.Stopped
+    ret true
+end
+
+@en "Seek"
+/// Moves playback to `seconds` from the start. Only while playing. A target
+/// past a known length is clamped to the last frame. The engine finishes the
+/// seek asynchronously, so PositionMs settles a moment later.
+pub func Seek(seconds: i64): bool:
+    if NextState(playerState, Command.Seek).allowed == false:
+        ret reject()
+    end
+    if seconds < 0:
+        setError(ErrorCode.BadArgument, "negative seek")
+        ret false
+    end
+    mut frames := seconds * playerRate
+    s := audio.ReadStatus()
+    if s.lengthKnown and frames >= s.lengthFrames:
+        frames = s.lengthFrames - 1
+    end
+    if audio.Seek(frames) == false:
+        setError(ErrorCode.DecodeFailure, "seek rejected")
+        ret false
+    end
+    ret true
+end
+
+@en "SetVolume"
+/// Sets the volume, 0 to 100. Stored when no device exists yet and applied at
+/// the next Play.
+pub func SetVolume(percent: int): bool:
+    if NextState(playerState, Command.Volume).allowed == false:
+        ret reject()
+    end
+    if percent < 0 or percent > 100:
+        setError(ErrorCode.BadArgument, "volume must be 0 to 100")
+        ret false
+    end
+    playerVolume = percent
+    if audio.GetVolume() >= 0:
+        audio.SetVolume(percent)
+    end
+    ret true
+end
+
+@en "GetVolume"
+/// The requested volume, 0 to 100, whether or not a device exists.
+pub func GetVolume(): int:
+    ret playerVolume
+end
+
+@en "Tick"
+/// Call this regularly from the event loop. While playing it notices a decode
+/// error and the end of the track. `nowMs` is a monotonic clock reading the
+/// caller supplies; nothing uses it yet.
+pub func Tick(_nowMs: i64):
+    if playerState != State.Playing:
+        ret
+    end
+    s := audio.ReadStatus()
+    if s.decodeErrors > playerDecodeBase:
+        setError(ErrorCode.DecodeFailure, audio.DecoderLastError())
+        playerState = State.Error
+        audio.Stop()
+        ret
+    end
+    if s.atEnd and s.fillLevel == 0:
+        playerState = State.Ended
+        audio.Stop()
+    end
+end
+
+@en "CurrentPath"
+/// The path being played, or the empty string when no file is open.
+pub func CurrentPath(): str:
+    ret playerCurrent
 end
