@@ -26,7 +26,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test fmt fmt-check clean docs docs-check docs-format-check spike-build spike-run spike-check spike-check-device spike-measure
+.PHONY: help build run test fmt fmt-check clean docs docs-check docs-format-check spike-build spike-run spike-check spike-check-device spike-measure soak
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
@@ -43,6 +43,7 @@ help:
 	@echo "make spike-check build and run the tone spike on the null backend"
 	@echo "make spike-check-device build and run the tone spike on the default device"
 	@echo "make spike-measure print the STAGE-03 measurement table (M1-M8, real device)"
+	@echo "make soak      one hour of frames through the engine on a virtual clock (opt-in, not in test or CI)"
 	@echo "Salam $(SALAM_VERSION)"
 
 build: $(MINIAUDIO_OBJ) $(SHIM_OBJ)
@@ -105,3 +106,6 @@ $(SPIKE_MEASURE_BIN): $(MINIAUDIO_OBJ) $(SHIM_OBJ) spike/measure.salam
 
 spike-measure: $(SPIKE_MEASURE_BIN)
 	sh spike/measure.sh
+
+soak: build
+	sh tests/soak.sh

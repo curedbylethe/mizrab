@@ -1,0 +1,141 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The soak consumer, driven by tests/soak.sh (`make soak`). Not a test: the
+// name has no _test suffix, so tests/run.sh never discovers it.
+//
+// This is NOT a device test and says nothing about wall-clock cadence. The
+// engine is armed on the null backend but its callback is never started; this
+// program is the only consumer and calls FillFrames, the body of the real
+// callback, in fixed 480-frame chunks (10 ms of audio) as fast as the decoder
+// thread can supply them. The clock is virtual: one chunk is 10 ms by
+// definition, not by measurement.
+//
+// Usage: soak <wav> <expected-frames>
+//   <expected-frames> is the output-frame budget the run must hit exactly
+//   (3600 * 48000 for the one-hour soak).
+//
+// The consumer never starves: it pulls a chunk only when the ring holds a full
+// one, and sleeps 1 ms for the decoder thread otherwise. After the decoder
+// reports AtEnd every decoded frame is in the ring, so the remainder is pulled
+// in one last exact-size call and the ring must end empty.
+//
+// PASS needs frames_played == expected, decode_errors == 0, final fill == 0.
+// frames_decoded == frames_played and underruns == 0 are printed, and also
+// required. One scratch buffer is allocated before the loop; nothing is
+// allocated per chunk.
+
+import conv
+import mem
+import os
+import sync
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+
+chunk := 480 as i64
+// 10 minutes of audio at 48 kHz.
+milestone := 28800000 as i64
+
+func fmtInt(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+func line(s: audio.Status): str:
+    ret "frames=" + fmtInt(s.framesPlayed) + " capacity=" + fmtInt(s.fillCapacity) + " fill=" + fmtInt(s.fillLevel) + " decoded=" + fmtInt(s.framesDecoded) + " underruns=" + fmtInt(s.underruns)
+end
+
+func main:
+    args := os.Args()
+    if args.len() != 3:
+        println "usage: soak <wav> <expected-frames>"
+        ret 2
+    end
+    path := args.get(1)
+    expected := conv.ParseInt(args.get(2))
+    if fmtInt(expected) != args.get(2) or expected <= 0:
+        println "soak: FAIL bad expected-frames " + args.get(2)
+        ret 2
+    end
+    if audio.Open(path) == false:
+        println "soak: FAIL cannot open " + path + ": " + audio.DecoderLastError()
+        ret 1
+    end
+    if audio.Arm(true) == false:
+        println "soak: FAIL cannot arm the engine: " + audio.DecoderLastError()
+        audio.Close()
+        ret 1
+    end
+    buf := mem.AllocateZeroed((chunk * 2 * 4) as u64) as f32*
+    println "soak: path=" + path + " expected_frames=" + fmtInt(expected) + " chunk=" + fmtInt(chunk)
+    mut next := milestone
+    mut done := false
+    until done == false:
+        s := audio.ReadStatus()
+        if s.fillLevel >= chunk:
+            audio.FillFrames(buf, chunk)
+            p := s.framesPlayed + chunk
+            if p >= next:
+                println line(audio.ReadStatus())
+                next = next + milestone
+            end
+        else:
+            if s.atEnd:
+                // atEnd was read after fillLevel above, so re-read: the
+                // producer is finished and the remainder is final.
+                rest := audio.ReadStatus().fillLevel
+                if rest < chunk:
+                    if rest > 0:
+                        audio.FillFrames(buf, rest)
+                    end
+                    done = true
+                end
+            else:
+                sync.SleepMs(1)
+            end
+        end
+    end
+    f := audio.ReadStatus()
+    audio.Stop()
+    audio.Close()
+    mem.Free(buf as void*)
+    println line(f)
+    mut ok := true
+    if f.framesPlayed != expected:
+        println "soak: frames_played != expected (" + fmtInt(f.framesPlayed) + " vs " + fmtInt(expected) + ")"
+        ok = false
+    end
+    if f.decodeErrors != 0:
+        ok = false
+    end
+    if f.fillLevel != 0 or f.framesDecoded != f.framesPlayed or f.underruns != 0:
+        ok = false
+    end
+    println "summary: frames_played=" + fmtInt(f.framesPlayed) + " frames_decoded=" + fmtInt(f.framesDecoded) + " underruns=" + fmtInt(f.underruns) + " decode_errors=" + fmtInt(f.decodeErrors)
+    if ok:
+        println "soak: PASS"
+        ret 0
+    end
+    println "soak: FAIL"
+    ret 1
+end
