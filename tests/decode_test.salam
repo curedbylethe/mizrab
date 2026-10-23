@@ -15,9 +15,10 @@
 
 // Covers the decoder: one fixture per format streams through the ring, the
 // length matrix (known for WAV/FLAC/MP3, unknown for OGG), the failure paths
-// of Open, and a seek on the WAV fixture. There is no consumer thread, so the
-// test is the consumer and drains the ring itself. Lossy formats assert only
-// a lower bound on the frame count.
+// of Open, the closed state, Stop/Start continuity, a dead decoder restarted,
+// and seeks on the WAV fixture. There is no consumer thread, so the test is the
+// consumer and drains the ring itself. Lossy formats assert only a lower bound
+// on the frame count.
 
 import mem
 import sync
@@ -37,6 +38,13 @@ include "../audio/audio.salam"
 // The WAV fixture is 8 kHz mono, 12000 frames: 72000 frames at 48 kHz.
 wavFrames := 72000 as i64
 
+// After a seek to T (a multiple of 6) the resampler restarts from silence and
+// its first 91 frames are filter warm-up; from there the stream equals the
+// reference from T + 6 (the restart eats one input frame = 6 output frames).
+// Measured against a straight decode of the fixture, exact in every f32.
+seekLead := 6 as i64
+seekWarm := 100 as i64
+
 func newBuf(frames: i64): f32*:
     ret mem.AllocateZeroed((frames * 2 * 4) as u64) as f32*
 end
@@ -50,17 +58,41 @@ func copyAt(dst: f32*, at: i64, src: f32*, frames: i64):
     end
 end
 
-// Reports whether frames [0, frames) of `got` equal frames [0, frames) of
-// `want`.
-func same(got: f32*, want: f32*, frames: i64): bool:
+// Reports whether frames [from, from + frames) of `got` equal frames
+// [at, at + frames) of `want`.
+func sameAt(got: f32*, from: i64, want: f32*, at: i64, frames: i64): bool:
     mut i := 0 as i64
     until i < frames * 2:
-        if got[i] != want[i]:
+        if got[from * 2 + i] != want[at * 2 + i]:
             ret false
         end
         i = i + 1
     end
     ret true
+end
+
+// Reports whether frames [0, frames) of `got` equal frames [0, frames) of
+// `want`.
+func same(got: f32*, want: f32*, frames: i64): bool:
+    ret sameAt(got, 0, want, 0, frames)
+end
+
+// Waits up to five seconds for `n` frames to sit in the ring.
+func waitLevel(r: audio.Ring, n: i64):
+    mut idle := 0
+    until audio.FillLevel(r) < n and idle < 5000:
+        sync.SleepMs(1)
+        idle = idle + 1
+    end
+end
+
+// Waits up to five seconds for the seek in flight to finish.
+func waitSeek():
+    mut idle := 0
+    until audio.DecoderSeekPending() and idle < 5000:
+        sync.SleepMs(1)
+        idle = idle + 1
+    end
 end
 
 // Drains the running decoder to the end of the stream and returns the frame
@@ -122,6 +154,114 @@ func stream(path: str, lengthKnown: bool, keep: f32*): i64:
     ret total
 end
 
+// A second request published while the thread waits for the drain supersedes
+// the first instead of being replayed: one seek, to the newer target. The
+// ring is not read until both are published, so the first request is in flight
+// (the thread is parked in the drain wait) when the second arrives. The count
+// and the audio at 48000 prove it; a replay would count two seeks and leave
+// the seek pending until a second drain.
+func doubleSeek(ref: f32*):
+    r := audio.New(4096)
+    m := audio.NewMetrics()
+    tmp := newBuf(4096)
+    testing.AssertTrue(audio.DecoderOpen("fixtures/tone.wav"))
+    testing.AssertTrue(audio.DecoderStart(r, m))
+    testing.AssertEqInt64(audio.FillLevel(r), 4096)
+    testing.AssertTrue(audio.DecoderSeek(24000))
+    sync.SleepMs(50)
+    testing.AssertTrue(audio.DecoderSeekPending())
+    testing.AssertTrue(audio.DecoderSeek(48000))
+    sync.SleepMs(20)
+    testing.AssertEqInt64(audio.Read(r, tmp, 4096), 4096)
+    waitSeek()
+    testing.AssertFalse(audio.DecoderSeekPending())
+    waitLevel(r, 512)
+    testing.AssertEqInt64(audio.Read(r, tmp, 512), 512)
+    testing.AssertTrue(sameAt(tmp, seekWarm, ref, 48000 + seekLead + seekWarm, 512 - seekWarm))
+    testing.AssertTrue(audio.DecoderFramesDecoded() >= 48512)
+    testing.AssertEqInt64(audio.TakeSnapshot(m).seeks, 1)
+    testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 0)
+    audio.DecoderClose()
+    audio.FreeMetrics(m)
+    audio.Free(r)
+    mem.Free(tmp as void*)
+end
+
+// Stop with a chunk half written, then Start: the held-back frames come out
+// first and the whole stream equals a straight decode, frame for frame.
+func stopStart(ref: f32*):
+    r := audio.New(4096)
+    m := audio.NewMetrics()
+    tmp := newBuf(4096)
+    out := newBuf(wavFrames)
+    rest := newBuf(wavFrames)
+    testing.AssertTrue(audio.DecoderOpen("fixtures/tone.wav"))
+    testing.AssertTrue(audio.DecoderStart(r, m))
+    testing.AssertEqInt64(audio.FillLevel(r), 4096)
+    testing.AssertEqInt64(audio.Read(r, tmp, 500), 500)
+    copyAt(out, 0, tmp, 500)
+    // The thread tops the ring up from its held chunk: 5 chunks decoded, 4596
+    // delivered, 524 still held.
+    waitLevel(r, 4096)
+    testing.AssertEqInt64(audio.FillLevel(r), 4096)
+    audio.DecoderStop()
+    testing.AssertEqInt64(audio.DecoderFramesDecoded(), 5120)
+    testing.AssertEqInt64(audio.Read(r, tmp, 4096), 4096)
+    copyAt(out, 500, tmp, 4096)
+    testing.AssertTrue(audio.DecoderStart(r, m))
+    got := drain(r, rest)
+    copyAt(out, 4596, rest, got)
+    testing.AssertEqInt64(4596 + got, wavFrames)
+    testing.AssertTrue(same(out, ref, wavFrames))
+    testing.AssertEqInt64(audio.DecoderFramesDecoded(), wavFrames)
+    testing.AssertEqInt64(audio.TakeSnapshot(m).decoded, wavFrames)
+    audio.DecoderClose()
+    audio.FreeMetrics(m)
+    audio.Free(r)
+    mem.Free(tmp as void*)
+    mem.Free(out as void*)
+    mem.Free(rest as void*)
+end
+
+// Ogg has no known length, so a seek far past the end is accepted and then
+// fails inside miniaudio: a dead decoder. Start must clear that, and the
+// restart plays on. (Start returning false after a dead prime has no
+// deterministic trigger: miniaudio reports a damaged file as a short read, never
+// as a read error, for all four formats.)
+func deadRestart():
+    r := audio.New(4096)
+    m := audio.NewMetrics()
+    tmp := newBuf(4096)
+    testing.AssertTrue(audio.DecoderOpen("fixtures/tone.ogg"))
+    testing.AssertTrue(audio.DecoderStart(r, m))
+    testing.AssertTrue(audio.DecoderSeek(10000000))
+    sync.SleepMs(20)
+    testing.AssertTrue(audio.Read(r, tmp, 4096) > 0)
+    mut idle := 0
+    until audio.DecoderAtEnd() == false and idle < 5000:
+        sync.SleepMs(1)
+        idle = idle + 1
+    end
+    testing.AssertTrue(audio.DecoderAtEnd())
+    testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 1)
+    testing.AssertTrue(audio.DecoderLastError() != "")
+    testing.AssertFalse(audio.DecoderSeek(0))
+    audio.DecoderStop()
+    testing.AssertTrue(audio.DecoderStart(r, m))
+    testing.AssertFalse(audio.DecoderAtEnd())
+    testing.AssertTrue(audio.FillLevel(r) > 0)
+    testing.AssertTrue(audio.DecoderSeek(0))
+    sync.SleepMs(20)
+    testing.AssertTrue(audio.Read(r, tmp, 4096) > 0)
+    waitSeek()
+    testing.AssertEqInt64(audio.TakeSnapshot(m).seeks, 1)
+    testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 1)
+    audio.DecoderClose()
+    audio.FreeMetrics(m)
+    audio.Free(r)
+    mem.Free(tmp as void*)
+end
+
 func main:
     // Failed opens leave the decoder closed and say why.
     testing.AssertFalse(audio.DecoderOpen("fixtures/missing.wav"))
@@ -129,9 +269,34 @@ func main:
     testing.AssertFalse(audio.DecoderOpen("fixtures/README.md"))
     testing.AssertTrue(audio.DecoderLastError() != "")
 
-    // Not running: nothing to start or seek.
+    // Not running: nothing to start or seek, and every getter is safe closed.
     testing.AssertFalse(audio.DecoderSeek(0))
     testing.AssertFalse(audio.DecoderStart(audio.New(8), audio.NewMetrics()))
+    testing.AssertFalse(audio.DecoderAtEnd())
+    testing.AssertEqInt64(audio.DecoderFramesDecoded(), 0)
+    testing.AssertFalse(audio.DecoderSeekPending())
+    testing.AssertFalse(audio.DecoderLengthKnown())
+    testing.AssertEqInt64(audio.DecoderLengthFrames(), 0)
+    audio.DecoderStop()
+    audio.DecoderClose()
+
+    // A failed open after a close must not show the closed file: length, error
+    // and the cell getters are all reset.
+    testing.AssertTrue(audio.DecoderOpen("fixtures/tone.wav"))
+    testing.AssertTrue(audio.DecoderLengthKnown())
+    testing.AssertEqInt64(audio.DecoderLengthFrames(), wavFrames)
+    audio.DecoderClose()
+    audio.DecoderClose()
+    testing.AssertFalse(audio.DecoderOpen("fixtures/missing.wav"))
+    testing.AssertTrue(audio.DecoderLastError() != "")
+    testing.AssertFalse(audio.DecoderLengthKnown())
+    testing.AssertEqInt64(audio.DecoderLengthFrames(), 0)
+    testing.AssertFalse(audio.DecoderAtEnd())
+    testing.AssertEqInt64(audio.DecoderFramesDecoded(), 0)
+    testing.AssertFalse(audio.DecoderSeekPending())
+    audio.DecoderClose()
+    audio.DecoderClose()
+    testing.AssertEqStr(audio.DecoderLastError(), "")
 
     // One fixture per format.
     ref := newBuf(wavFrames)
@@ -157,38 +322,38 @@ func main:
     sync.SleepMs(50)
     // Nothing has drained the ring, so the thread is still waiting for it.
     testing.AssertTrue(audio.DecoderSeekPending())
-    testing.AssertTrue(audio.FillLevel(r) > 0)
+    levelBefore := audio.FillLevel(r)
+    testing.AssertTrue(levelBefore > 0)
+    // One Read empties it; the level is not re-read, because the thread refills
+    // the moment the seek ends.
     drained := audio.Read(r, tmp, 4096)
-    testing.AssertTrue(drained > 0)
-    testing.AssertEqInt64(audio.FillLevel(r), 0)
+    testing.AssertEqInt64(drained, levelBefore)
 
-    mut idle := 0
-    until audio.DecoderSeekPending() and idle < 5000:
-        sync.SleepMs(1)
-        idle = idle + 1
-    end
+    waitSeek()
     testing.AssertFalse(audio.DecoderSeekPending())
-    idle = 0
-    until audio.FillLevel(r) < 512 and idle < 5000:
-        sync.SleepMs(1)
-        idle = idle + 1
-    end
+    waitLevel(r, 512)
     testing.AssertEqInt64(audio.Read(r, tmp, 512), 512)
+    // Silence first (the resampler restarts), then the reference from the
+    // target on, six frames in.
+    testing.AssertTrue(tmp[0] == 0.0 as f32 and tmp[1] == 0.0 as f32)
+    testing.AssertTrue(sameAt(tmp, seekWarm, ref, 24000 + seekLead + seekWarm, 512 - seekWarm))
     testing.AssertTrue(audio.DecoderFramesDecoded() >= 24512)
     testing.AssertEqInt64(audio.TakeSnapshot(m).seeks, 1)
     testing.AssertEqInt64(audio.TakeSnapshot(m).decodeErrors, 0)
 
     // The rest of the file still plays to the end after the seek.
-    // 48000 frames follow frame 24000. The resampler restarts at the seek and
-    // loses a few tail frames (6 today), so the check is a bound, not equality;
-    // any other position would be off by thousands.
+    // 48000 frames follow frame 24000; the restart eats seekLead of them.
     gap := wavFrames - 24000 - 512 - drain(r, null)
-    testing.AssertTrue(gap >= 0 and gap <= 16)
+    testing.AssertEqInt64(gap, seekLead)
     testing.AssertTrue(audio.DecoderAtEnd())
     audio.DecoderClose()
     audio.FreeMetrics(m)
     audio.Free(r)
     mem.Free(tmp as void*)
+
+    doubleSeek(ref)
+    stopStart(ref)
+    deadRestart()
     mem.Free(ref as void*)
     ret testing.Summary()
 end

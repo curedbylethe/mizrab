@@ -18,7 +18,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 /* One device and one context: the engine plays one stream at a time. */
 static ma_context g_context;
@@ -126,19 +125,6 @@ int mizrab_ma_stop(void* device)
     }
 
     return 0;
-}
-
-/* Monotonic nanoseconds for the in-callback timestamps. CLOCK_MONOTONIC is 6 on
- * macOS and 1 on Linux; the id stays here so Salam never sees it. */
-long long mizrab_now_ns(void)
-{
-    struct timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
 }
 
 /* ma_device_uninit joins the audio thread, so this is called from main only. */
@@ -286,21 +272,13 @@ int mizrab_ma_decoder_length_known(void)
     return g_length > 0;
 }
 
-unsigned long long mizrab_ma_decoder_cursor(void)
-{
-    ma_uint64 cursor = 0;
-
-    if (!g_decoder_ready || ma_decoder_get_cursor_in_pcm_frames(&g_decoder, &cursor) != MA_SUCCESS) {
-        return 0;
-    }
-
-    return cursor;
-}
-
 void mizrab_ma_decoder_destroy(void)
 {
     if (g_decoder_ready) {
         ma_decoder_uninit(&g_decoder);
         g_decoder_ready = 0;
     }
+
+    g_length = 0;
+    g_length_cached = 0;
 }
