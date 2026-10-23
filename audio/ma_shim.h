@@ -48,10 +48,6 @@ int mizrab_ma_decoder_seek(unsigned long long frame);
 unsigned long long mizrab_ma_decoder_length_frames(void);
 /* 1 when length_frames is a real duration. */
 int mizrab_ma_decoder_length_known(void);
-unsigned long long mizrab_ma_decoder_cursor(void);
 void mizrab_ma_decoder_destroy(void);
-
-/* Salam has no sizeof, so it cannot fill a timespec; hand it a scalar instead. */
-long long mizrab_now_ns(void);
 
 #endif
