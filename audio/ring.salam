@@ -20,8 +20,9 @@
 // wrap in any practical lifetime.
 //
 // Allocation rule: New allocates the buffer and the two cells and Free
-// releases them. Write, Read and FillLevel never allocate, log or lock, which
-// is what makes them safe in the audio callback.
+// releases them; only the buffer allocation is checked (see New). Write, Read
+// and FillLevel never allocate, log or lock, which is what makes them safe in
+// the audio callback.
 //
 // Ordering: std/atomic offers i64 cells only and every operation is seq_cst,
 // with no fence and no ordering parameter. seq_cst is stronger than the
@@ -51,8 +52,9 @@ end
 
 @en "New"
 /// Allocates a ring of `frames` stereo frames. `frames` must be a power of two
-/// greater than zero. On a bad size or an allocation failure the result is
-/// not Valid.
+/// greater than zero. A bad size or a failed buffer allocation gives a ring
+/// that is not Valid. The two cells are not checked: atomic.NewI64 does not
+/// null-check its allocation, so an out-of-memory cell crashes inside it.
 pub func New(frames: i64): Ring:
     if frames <= 0 or (frames & (frames - 1)) != 0:
         ret Ring {}
@@ -78,9 +80,10 @@ pub func Free(r: Ring):
 end
 
 @en "Valid"
-/// Reports whether New produced a usable ring.
+/// Reports whether the ring has a buffer and both cells. Pointer compares
+/// only, so the audio callback may call it.
 pub func Valid(r: Ring): bool:
-    ret r.buf != null
+    ret r.buf != null and r.wr.cell != null and r.rd.cell != null
 end
 
 @en "Capacity"
