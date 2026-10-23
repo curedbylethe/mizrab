@@ -6,7 +6,7 @@ keywords:
   - "targets"
   - "build"
   - "format"
-  - "spike"
+  - "soak"
 ---
 
 Every task is a `make` target. `make help` prints the short list and the Salam version the `Makefile` reads from `.salam-version`; this page is the full reference, with the command each target runs. The `Makefile` is the source of truth.
@@ -18,19 +18,19 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 | Target | Runs | Purpose |
 | --- | --- | --- |
 | `make help` | prints the target list and `Salam <version>` | quick reference, no build |
-| `make build` | `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab` |
+| `make build` | compiles `audio/miniaudio.c` and `audio/ma_shim.c` to `build/miniaudio.o` and `build/ma_shim.o` with `cc`, then `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab`, linking the two objects |
 | `make run` | `make build`, then `./build/mizrab` | build and run the player |
-| `make test` | `make build`, then `sh tests/run.sh` | golden tests plus the CLI smoke checks; see [tests](/tests) |
+| `make test` | `make build`, then `sh tests/run.sh` | golden tests, including the audio engine on the null backend, plus the CLI smoke checks; see [tests](/tests) |
 | `make clean` | `rm -rf build .salam-build` | remove build output and the compiler's scratch directory |
 
-The one backend is LLVM: there is no `--backend=c` path and no second build target.
+The two objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.c`, `ma_shim.c` or `ma_shim.h` change, so a clean tree compiles them once; the first `make build` is slower than later ones. The one backend is LLVM: there is no `--backend=c` path and no second build target.
 
 ## Formatting
 
 | Target | Runs | Purpose |
 | --- | --- | --- |
-| `make fmt` | `salam format main.salam commands` | rewrite every Salam source in place |
-| `make fmt-check` | `salam format --check main.salam commands` | fail if any source would be rewritten |
+| `make fmt` | `salam format main.salam commands audio` | rewrite every Salam source in place |
+| `make fmt-check` | `salam format --check main.salam commands audio` | fail if any source would be rewritten |
 
 `salam format` is the authority for style; the conventions are on the [contributing](/contributing) page.
 
@@ -44,19 +44,13 @@ The one backend is LLVM: there is no `--backend=c` path and no second build targ
 
 `make docs-format-check` compares the worktree with the index, so it fails on an unstaged formatting change even when the page is correct. Stage your page edits before running it; CI runs it on a clean checkout.
 
-## Miniaudio spike
-
-The `spike-*` targets belong to the FFI spike, not to the player. `make spike-build` compiles miniaudio with `-O2` and links two objects by relative path, so on a clean tree it is slower than `make build`. The recipe and measurements are in [the miniaudio spike](/spike-miniaudio).
+## Engine soak
 
 | Target | Runs | Purpose |
 | --- | --- | --- |
-| `make spike-build` | compiles `audio/miniaudio.c` and `spike/ma_shim.c` into `build/`, then `cd spike && salam build tone.salam --output=../build/spike` | build the tone program to `build/spike` |
-| `make spike-run` | `make spike-build`, then `./build/spike` | build and play the tone on the default device |
-| `make spike-check` | `make spike-build`, then `./build/spike --null` | build and run on miniaudio's null backend; the macOS CI path |
-| `make spike-check-device` | `make spike-build`, then `./build/spike` | build and run on the default device; the Linux CI path |
-| `make spike-measure` | builds `spike/measure.salam` into `build/spike-measure`, then `sh spike/measure.sh` | print the M1–M9 measurement table from a real device |
+| `make soak` | `make build`, then `sh tests/soak.sh` | push one hour of frames through the audio engine on a virtual clock and check the frame count and memory |
 
-`spike-measure` uses its own binary so that `spike-check`, the CI path, keeps exactly the behaviour it shipped with.
+`make soak` is opt-in: it is not part of `make test` and CI does not run it. It generates a 28.8 MB WAV under `build/soak/`, ran in 18 to 19 seconds on the recorded macOS runs, and uses a virtual clock, so it makes no wall-clock or device-cadence claim. See [the audio engine](/audio-engine#soak) for the recorded result.
 
 ## Run the harness directly
 

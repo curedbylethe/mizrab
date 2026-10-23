@@ -11,6 +11,8 @@ keywords:
 
 What the playback-backend issue asked, what this machine measured, and what the playback backend should take from it. The evidence lives in `spike/` (throwaway) and in the numbers below, which were produced by `make spike-measure`. This page is the findings document on the site.
 
+The engine this spike recommended has since been built; see [the audio engine](/audio-engine). The findings below stand. The spike's sources (`spike/`) and its `make spike-*` targets were removed once the engine replaced them, and the shim moved to `audio/ma_shim.{h,c}`; the last commit before their removal is `2043b27`, so `git show 2043b27:spike/tone.salam` recovers them. The commands, paths and targets below are as they were then.
+
 Host for every figure: macOS 27.0.1 on arm64 (Darwin 27.0.1), Apple clang 17.0.0, Salam 0.5.6. Times are wall-clock on an otherwise idle machine.
 
 ## Question
@@ -48,7 +50,7 @@ MINIAUDIO_DEFS="-DMA_NO_DECODING -DMA_NO_ENCODING -DMA_NO_WAV -DMA_NO_FLAC \
 
 mkdir -p build
 cc -c -O2 -Iaudio $MINIAUDIO_DEFS -o build/miniaudio.o audio/miniaudio.c
-cc -c -O2 -Iaudio $MINIAUDIO_DEFS -o build/ma_shim.o spike/ma_shim.c
+cc -c -O2 -Iaudio $MINIAUDIO_DEFS -o build/ma_shim.o audio/ma_shim.c
 cd spike && salam build tone.salam --output=../build/spike --log-level=warn --backend=llvm
 ```
 
@@ -81,7 +83,7 @@ typedef void (* ma_device_data_proc)(ma_device* pDevice, void* pOutput, const vo
 
 Pointers cross the boundary as `void *` (`out as f32 *` recovers the buffer), and `frameCount` as `u32`.
 
-**The shim is six device functions plus a clock.** `spike/ma_shim.h` declares:
+**The shim is six device functions plus a clock.** `ma_shim.h` (then `spike/ma_shim.h`, now `audio/ma_shim.h`) declared:
 
 - `mizrab_ma_create(fill, sample_rate, channels, null_backend)` — initialises context and device, returns `void *` or null.
 - `mizrab_ma_start(device)` / `mizrab_ma_stop(device)` — wrap `ma_device_start` / `ma_device_stop`, return 0 or the `ma_result`.
@@ -195,7 +197,7 @@ The log line is the check: `backend=Null` versus `backend=Core Audio` (or `backe
 
 ## Recommendation for the playback backend
 
-Take `spike/ma_shim.h` and `spike/ma_shim.c` essentially as they are, and take `spike/tone.salam` as the shape of the callback and the start/stop/destroy sequence. Throw away `spike/measure.salam`, `spike/measure.sh` and `spike/probe_struct.salam`: they are measurement scaffolding, not an engine.
+Take `audio/ma_shim.h` and `audio/ma_shim.c` (then `spike/`) essentially as they are, and take `spike/tone.salam` as the shape of the callback and the start/stop/destroy sequence. Throw away `spike/measure.salam`, `spike/measure.sh` and `spike/probe_struct.salam`: they are measurement scaffolding, not an engine.
 
 - Keep the shim C-side surface small: create, start, stop, destroy, last error, backend name. Every new field added to it is a place Salam cannot see.
 - Put the ring buffer and the playback state machine in Salam. The spike proves an ordinary Salam function runs on the audio thread (M8), so decoders and state belong there, not in C.
