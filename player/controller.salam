@@ -34,6 +34,10 @@ const playerRate := 48000 as i64
 
 mut playerCurrent := ""
 mut playerDecodeBase := 0 as i64
+mut playerGapStart := -1 as i64
+mut playerLastGap := -1 as i64
+mut playerGapPending := false
+mut playerPlayedBase := 0 as i64
 
 // Rejects `command` in the current state: records why and reports false.
 func reject(): bool:
@@ -96,26 +100,12 @@ func startDevice(): bool:
     ret false
 end
 
-func pauseNow():
-    playerState = State.Paused
-    audio.Stop()
-end
-
-func resumeNow(): bool:
-    if startDevice() == false:
-        ret fail()
-    end
-    playerState = State.Playing
-    ret true
-end
-
-@en "Play"
-/// Opens and starts `path`, replacing whatever was playing. On failure the
-/// state is error, the last error says why and no file stays open.
-pub func Play(path: str): bool:
-    if NextState(playerState, Command.Play).allowed == false:
-        ret reject()
-    end
+// Opens and starts `path`, replacing whatever was playing: the body of Play and
+// of every move through the queue. The caller has checked the table. A start
+// is never a gap in progress, so any pending gap is dropped. On failure the
+// state is error and no file stays open.
+func startPath(path: str): bool:
+    playerGapPending = false
     playerState = State.Loading
     audio.Close()
     playerCurrent = ""
@@ -131,6 +121,83 @@ pub func Play(path: str): bool:
     audio.SetVolume(playerVolume)
     playerState = State.Playing
     ret true
+end
+
+// The queue move behind Next and Prev: the table first, then the queue, then
+// the same open-and-start as Play. The index moves before the open, so a track
+// that fails to open is skipped by the next move.
+func step(command: Command, forward: bool): bool:
+    if NextState(playerState, command).allowed == false:
+        ret reject()
+    end
+    if QueueLen() == 0:
+        setError(ErrorCode.BadArgument, "queue is empty")
+        ret false
+    end
+    i := queueAdvance(forward)
+    if i < 0:
+        if forward:
+            setError(ErrorCode.BadArgument, "end of queue")
+        else:
+            setError(ErrorCode.BadArgument, "start of queue")
+        end
+        ret false
+    end
+    ret startPath(queuePaths.get(i))
+end
+
+// The track drained. Decides what plays next: nothing when there is no queue or
+// it has run out, the same track for repeat One, otherwise the next entry. A
+// started track opens the gap, which Tick closes at its first played frame.
+func advanceAfterEnd(nowMs: i64):
+    mut path := playerCurrent
+    if QueueLen() == 0:
+        playerState = State.Ended
+        audio.Stop()
+        ret
+    end
+    if queueRepeat != RepeatMode.One:
+        i := queueAdvance(true)
+        if i < 0:
+            playerState = State.Ended
+            audio.Stop()
+            ret
+        end
+        path = queuePaths.get(i)
+    end
+    if startPath(path) == false:
+        ret
+    end
+    playerGapStart = nowMs
+    playerGapPending = true
+    playerPlayedBase = audio.ReadStatus().framesPlayed
+end
+
+func pauseNow():
+    playerGapPending = false
+    playerState = State.Paused
+    audio.Stop()
+end
+
+func resumeNow(): bool:
+    if startDevice() == false:
+        ret fail()
+    end
+    playerState = State.Playing
+    ret true
+end
+
+@en "Play"
+/// Opens and starts `path`, replacing whatever was playing. A path that is in
+/// the queue becomes the current entry, so Next follows from it; any other path
+/// leaves the queue alone. On failure the state is error, the last error says
+/// why and no file stays open.
+pub func Play(path: str): bool:
+    if NextState(playerState, Command.Play).allowed == false:
+        ret reject()
+    end
+    queueFollow(path)
+    ret startPath(path)
 end
 
 @en "Pause"
@@ -180,6 +247,21 @@ pub func Stop(): bool:
     clearError()
     playerState = State.Stopped
     ret true
+end
+
+@en "Next"
+/// Plays the next queue entry (the next one in the shuffle deck when shuffle
+/// is on). False when the queue is empty or, with repeat Off, already at its
+/// end. Repeat One does not change an explicit next.
+pub func Next(): bool:
+    ret step(Command.Next, true)
+end
+
+@en "Prev"
+/// Plays the previous queue entry. Always linear, even with shuffle on. False
+/// when the queue is empty or, with repeat Off, already at its start.
+pub func Prev(): bool:
+    ret step(Command.Prev, false)
 end
 
 @en "Seek"
@@ -232,13 +314,21 @@ end
 
 @en "Tick"
 /// Call this regularly from the event loop. While playing it notices a decode
-/// error and the end of the track. `nowMs` is a monotonic clock reading the
-/// caller supplies; nothing uses it yet.
-pub func Tick(_nowMs: i64):
+/// error and the end of the track, which advances the queue (see the repeat
+/// modes) or ends playback. `nowMs` is a monotonic clock reading the caller
+/// supplies; it only times the gap between tracks.
+pub func Tick(nowMs: i64):
     if playerState != State.Playing:
         ret
     end
     s := audio.ReadStatus()
+    if playerGapPending and s.framesPlayed > playerPlayedBase:
+        playerLastGap = nowMs - playerGapStart
+        if playerLastGap < 0:
+            playerLastGap = 0
+        end
+        playerGapPending = false
+    end
     if s.decodeErrors > playerDecodeBase:
         setError(ErrorCode.DecodeFailure, audio.DecoderLastError())
         playerState = State.Error
@@ -246,9 +336,18 @@ pub func Tick(_nowMs: i64):
         ret
     end
     if s.atEnd and s.fillLevel == 0:
-        playerState = State.Ended
-        audio.Stop()
+        advanceAfterEnd(nowMs)
     end
+end
+
+@en "LastGapMs"
+/// The last measured gap between two tracks, in milliseconds, or -1 until one
+/// has been. It runs from the Tick that saw a track drain to the Tick that saw
+/// the next one play its first frame, so it is the controller's own restart
+/// cost (close, open, start and the device's first callback), not silence put
+/// in on purpose. Only an automatic advance is measured, not a Next or Prev.
+pub func LastGapMs(): i64:
+    ret playerLastGap
 end
 
 @en "CurrentPath"
