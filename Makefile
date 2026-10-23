@@ -5,7 +5,7 @@ CC ?= cc
 BUILD := build
 BIN := $(BUILD)/mizrab
 ENTRY := main.salam
-SOURCES := main.salam commands
+SOURCES := main.salam commands audio
 FLAGS := --log-level=warn --backend=llvm
 SALAM_VERSION := $(shell cat .salam-version)
 MINT ?= mint

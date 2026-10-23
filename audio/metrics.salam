@@ -1,0 +1,121 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Engine counters. Each counter is one std/atomic cell allocated by
+// NewMetrics; the Add functions never allocate, log or lock, so the audio
+// callback and the decoder thread may call them. TakeSnapshot copies the
+// values into a plain struct that tests and a debug overlay can hold.
+
+package audio
+
+import atomic
+
+@en "Metrics"
+/// The atomic counters the engine reports.
+pub struct Metrics:
+    pub underruns: atomic.I64 = atomic.I64 {}
+    pub overruns: atomic.I64 = atomic.I64 {}
+    pub decoded: atomic.I64 = atomic.I64 {}
+    pub played: atomic.I64 = atomic.I64 {}
+    pub decodeErrors: atomic.I64 = atomic.I64 {}
+    pub seeks: atomic.I64 = atomic.I64 {}
+end
+
+@en "Snapshot"
+/// A plain-value copy of the counters at one moment.
+pub struct Snapshot:
+    pub underruns: i64 = 0
+    pub overruns: i64 = 0
+    pub decoded: i64 = 0
+    pub played: i64 = 0
+    pub decodeErrors: i64 = 0
+    pub seeks: i64 = 0
+end
+
+@en "NewMetrics"
+/// Allocates the counters, all zero.
+pub func NewMetrics(): Metrics:
+    ret Metrics {
+        underruns = atomic.NewI64(0), overruns = atomic.NewI64(0), decoded = atomic.NewI64(0),
+        played = atomic.NewI64(0), decodeErrors = atomic.NewI64(0), seeks = atomic.NewI64(0),
+    }
+end
+
+@en "FreeMetrics"
+/// Releases the counters. Call it once, after all threads have stopped.
+pub func FreeMetrics(m: Metrics):
+    atomic.DestroyI64(m.underruns)
+    atomic.DestroyI64(m.overruns)
+    atomic.DestroyI64(m.decoded)
+    atomic.DestroyI64(m.played)
+    atomic.DestroyI64(m.decodeErrors)
+    atomic.DestroyI64(m.seeks)
+end
+
+@en "AddUnderrun"
+/// Adds `frames` missing frames to the underrun count.
+pub func AddUnderrun(m: Metrics, frames: i64):
+    atomic.Add(m.underruns, frames)
+end
+
+@en "AddOverrun"
+/// Adds `frames` frames the ring refused to the overrun count.
+pub func AddOverrun(m: Metrics, frames: i64):
+    atomic.Add(m.overruns, frames)
+end
+
+@en "AddDecoded"
+/// Adds `frames` decoded frames.
+pub func AddDecoded(m: Metrics, frames: i64):
+    atomic.Add(m.decoded, frames)
+end
+
+@en "AddPlayed"
+/// Adds `frames` frames handed to the device.
+pub func AddPlayed(m: Metrics, frames: i64):
+    atomic.Add(m.played, frames)
+end
+
+@en "AddDecodeError"
+/// Counts one decode error.
+pub func AddDecodeError(m: Metrics):
+    atomic.Add(m.decodeErrors, 1)
+end
+
+@en "AddSeek"
+/// Counts one seek.
+pub func AddSeek(m: Metrics):
+    atomic.Add(m.seeks, 1)
+end
+
+@en "ResetMetrics"
+/// Zeroes every counter. Only legal while no thread touches them.
+pub func ResetMetrics(m: Metrics):
+    atomic.Store(m.underruns, 0)
+    atomic.Store(m.overruns, 0)
+    atomic.Store(m.decoded, 0)
+    atomic.Store(m.played, 0)
+    atomic.Store(m.decodeErrors, 0)
+    atomic.Store(m.seeks, 0)
+end
+
+@en "TakeSnapshot"
+/// Copies the counters into a Snapshot.
+pub func TakeSnapshot(m: Metrics): Snapshot:
+    ret Snapshot {
+        underruns = atomic.Load(m.underruns), overruns = atomic.Load(m.overruns), decoded = atomic.Load(m.decoded),
+        played = atomic.Load(m.played), decodeErrors = atomic.Load(m.decodeErrors), seeks = atomic.Load(m.seeks),
+    }
+end
