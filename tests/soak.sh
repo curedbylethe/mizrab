@@ -83,6 +83,8 @@ else
 fi
 echo "wav: $WAV"
 echo "wav_size_bytes=$size sha256=$sum"
+# audio-engine.mdx quotes this hash as the source identity of the recorded runs.
+[ "$sum" = 61d97cd8754359385b24dafa4a07452567af4bd04028a2e57c07e61542c3f17c ] || die "generated WAV sha256 $sum differs from the recorded source hash"
 echo "budget_frames=$BUDGET (${DURATION_S} s x 48000 Hz; source ${SRC_RATE} Hz mono 8-bit, ${PAYLOAD} samples)"
 
 # Build from tests/ so the `link` paths in soak.salam resolve for both the
