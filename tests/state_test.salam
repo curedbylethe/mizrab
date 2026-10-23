@@ -1,0 +1,143 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Asserts the whole transition table, state by state in table order (7 states
+// x 9 commands = 63 pairs), plus the names, the error text and the Init/Reset
+// seams. Pure: no engine, no audio, no fixtures.
+
+import testing
+
+include "../player/player.salam"
+
+// A command that is allowed leads to `dest`.
+func ok(from: player.State, c: player.Command, dest: player.State):
+    t := player.NextState(from, c)
+    testing.AssertTrue(t.allowed)
+    testing.AssertEqStr(player.StateName(t.to), player.StateName(dest))
+end
+
+// A command that is rejected leaves the state where it was.
+func no(from: player.State, c: player.Command):
+    t := player.NextState(from, c)
+    testing.AssertFalse(t.allowed)
+    testing.AssertEqStr(player.StateName(t.to), player.StateName(from))
+end
+
+func main:
+    // idle
+    ok(player.State.Idle, player.Command.Play, player.State.Loading)
+    no(player.State.Idle, player.Command.Toggle)
+    no(player.State.Idle, player.Command.Pause)
+    no(player.State.Idle, player.Command.Resume)
+    no(player.State.Idle, player.Command.Stop)
+    no(player.State.Idle, player.Command.Seek)
+    no(player.State.Idle, player.Command.Next)
+    no(player.State.Idle, player.Command.Prev)
+    ok(player.State.Idle, player.Command.Volume, player.State.Idle)
+    // loading
+    no(player.State.Loading, player.Command.Play)
+    no(player.State.Loading, player.Command.Toggle)
+    no(player.State.Loading, player.Command.Pause)
+    no(player.State.Loading, player.Command.Resume)
+    no(player.State.Loading, player.Command.Stop)
+    no(player.State.Loading, player.Command.Seek)
+    no(player.State.Loading, player.Command.Next)
+    no(player.State.Loading, player.Command.Prev)
+    no(player.State.Loading, player.Command.Volume)
+    // playing
+    ok(player.State.Playing, player.Command.Play, player.State.Loading)
+    ok(player.State.Playing, player.Command.Toggle, player.State.Paused)
+    ok(player.State.Playing, player.Command.Pause, player.State.Paused)
+    no(player.State.Playing, player.Command.Resume)
+    ok(player.State.Playing, player.Command.Stop, player.State.Stopped)
+    ok(player.State.Playing, player.Command.Seek, player.State.Playing)
+    ok(player.State.Playing, player.Command.Next, player.State.Loading)
+    ok(player.State.Playing, player.Command.Prev, player.State.Loading)
+    ok(player.State.Playing, player.Command.Volume, player.State.Playing)
+    // paused
+    ok(player.State.Paused, player.Command.Play, player.State.Loading)
+    ok(player.State.Paused, player.Command.Toggle, player.State.Playing)
+    no(player.State.Paused, player.Command.Pause)
+    ok(player.State.Paused, player.Command.Resume, player.State.Playing)
+    ok(player.State.Paused, player.Command.Stop, player.State.Stopped)
+    no(player.State.Paused, player.Command.Seek)
+    ok(player.State.Paused, player.Command.Next, player.State.Loading)
+    ok(player.State.Paused, player.Command.Prev, player.State.Loading)
+    ok(player.State.Paused, player.Command.Volume, player.State.Paused)
+    // stopped
+    ok(player.State.Stopped, player.Command.Play, player.State.Loading)
+    no(player.State.Stopped, player.Command.Toggle)
+    no(player.State.Stopped, player.Command.Pause)
+    no(player.State.Stopped, player.Command.Resume)
+    no(player.State.Stopped, player.Command.Stop)
+    no(player.State.Stopped, player.Command.Seek)
+    ok(player.State.Stopped, player.Command.Next, player.State.Loading)
+    ok(player.State.Stopped, player.Command.Prev, player.State.Loading)
+    ok(player.State.Stopped, player.Command.Volume, player.State.Stopped)
+    // ended
+    ok(player.State.Ended, player.Command.Play, player.State.Loading)
+    ok(player.State.Ended, player.Command.Toggle, player.State.Loading)
+    no(player.State.Ended, player.Command.Pause)
+    no(player.State.Ended, player.Command.Resume)
+    ok(player.State.Ended, player.Command.Stop, player.State.Stopped)
+    no(player.State.Ended, player.Command.Seek)
+    ok(player.State.Ended, player.Command.Next, player.State.Loading)
+    ok(player.State.Ended, player.Command.Prev, player.State.Loading)
+    ok(player.State.Ended, player.Command.Volume, player.State.Ended)
+    // error
+    ok(player.State.Error, player.Command.Play, player.State.Loading)
+    no(player.State.Error, player.Command.Toggle)
+    no(player.State.Error, player.Command.Pause)
+    no(player.State.Error, player.Command.Resume)
+    ok(player.State.Error, player.Command.Stop, player.State.Stopped)
+    no(player.State.Error, player.Command.Seek)
+    ok(player.State.Error, player.Command.Next, player.State.Loading)
+    ok(player.State.Error, player.Command.Prev, player.State.Loading)
+    ok(player.State.Error, player.Command.Volume, player.State.Error)
+
+    testing.AssertEqStr(player.StateName(player.State.Idle), "idle")
+    testing.AssertEqStr(player.StateName(player.State.Loading), "loading")
+    testing.AssertEqStr(player.StateName(player.State.Playing), "playing")
+    testing.AssertEqStr(player.StateName(player.State.Paused), "paused")
+    testing.AssertEqStr(player.StateName(player.State.Stopped), "stopped")
+    testing.AssertEqStr(player.StateName(player.State.Ended), "ended")
+    testing.AssertEqStr(player.StateName(player.State.Error), "error")
+
+    testing.AssertEqStr(player.CommandName(player.Command.Play), "play")
+    testing.AssertEqStr(player.CommandName(player.Command.Toggle), "toggle")
+    testing.AssertEqStr(player.CommandName(player.Command.Pause), "pause")
+    testing.AssertEqStr(player.CommandName(player.Command.Resume), "resume")
+    testing.AssertEqStr(player.CommandName(player.Command.Stop), "stop")
+    testing.AssertEqStr(player.CommandName(player.Command.Seek), "seek")
+    testing.AssertEqStr(player.CommandName(player.Command.Next), "next")
+    testing.AssertEqStr(player.CommandName(player.Command.Prev), "prev")
+    testing.AssertEqStr(player.CommandName(player.Command.Volume), "volume")
+
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.None), "")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.FileMissing), "file not found")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.UnsupportedCodec), "unsupported audio format")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.DecodeFailure), "could not decode this file")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.DeviceLost), "audio device unavailable")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.PermissionDenied), "permission denied")
+    testing.AssertEqStr(player.TextFor(player.ErrorCode.BadArgument), "invalid command argument")
+
+    // A fresh player is idle with no error.
+    player.Init(true)
+    testing.AssertEqStr(player.StateName(player.CurrentState()), "idle")
+    testing.AssertEqStr(player.TextFor(player.LastError()), "")
+    testing.AssertEqStr(player.LastErrorText(), "")
+    testing.AssertEqStr(player.LastErrorDetail(), "")
+    ret testing.Summary()
+end
