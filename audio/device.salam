@@ -1,0 +1,219 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The playback device: opens miniaudio at the engine's fixed format (f32,
+// 2 channels, 48 kHz on both ends, so there is no sample-rate or channel
+// mismatch to convert) and drains the ring from an exported callback.
+//
+// Callback rule: FillFrames and mizrab_engine_fill run on miniaudio's audio
+// thread. They allocate nothing, lock nothing, log nothing and sleep never;
+// they only call Read, mem.Set and the metric Add functions. They must not
+// call any DevStart/DevStop/DevDestroy or other device lifecycle function.
+// The shim sets noPreSilencedOutputBuffer, so miniaudio does not zero the
+// buffer: FillFrames zeroes all of it itself before copying.
+//
+// Threading: Create, Start, Stop, Destroy and the volume pair are for the
+// control thread only. Prime the ring before DevStart (ma_device_start pulls
+// an initial chunk before it returns).
+//
+// Singleton ceiling (G17): the shim keeps one context and one device in C
+// statics and the callback state below is package globals, so the engine
+// supports one device at a time. A second DevCreate is refused.
+//
+// Not handled: miniaudio's notification callback is left unset, so hotplug,
+// route changes and device interruptions are ignored on purpose.
+//
+// Volume is the device's atomic master volume (0.0-1.0); there is no
+// per-sample gain in Salam.
+
+package audio
+
+import mem
+
+extern:
+    func mizrab_ma_create(fill: void *, rate: u32, channels: u32, null_backend: int): void *
+    func mizrab_ma_start(dev: void *): int
+    func mizrab_ma_stop(dev: void *): int
+    func mizrab_ma_destroy(dev: void *)
+    func mizrab_ma_last_error(): str
+    func mizrab_ma_backend_name(dev: void *): str
+    func mizrab_ma_set_volume(dev: void *, volume: f32): int
+    func mizrab_ma_get_volume(dev: void *): f32
+end
+
+// Fixed output format; the decoder converts to it.
+const devRate := 48000
+const devChannels := 2
+
+// State for the callback and the control thread. Set by DevCreate, which is
+// handed the ring and the metrics by the engine; this file never allocates or
+// frees them.
+mut devRing := Ring {}
+mut devMetrics := Metrics {}
+mut devHandle := null as void *
+mut devRunning := false
+
+export:
+    func mizrab_engine_fill(_dev: void *, out: void *, _inp: void *, frames: u32):
+        FillFrames(out as f32 *, frames as i64)
+    end
+end
+
+@en "FillFrames"
+/// Fills `frames` interleaved stereo f32 frames at `out`: drains the ring,
+/// zeroes the rest and counts the shortfall as underrun frames. The audio
+/// callback delegates here; tests may call it directly. Real-time safe.
+pub func FillFrames(out: f32*, frames: i64):
+    mem.Set(out as void*, 0, (frames * devChannels * 4) as u64)
+    got := Read(devRing, out, frames)
+    if got < frames:
+        AddUnderrun(devMetrics, frames - got)
+    end
+    if got > 0:
+        AddPlayed(devMetrics, got)
+    end
+end
+
+@en "DevCreate"
+/// Opens the device (not started) around the given ring and metrics, which
+/// must outlive it. `null_backend` selects miniaudio's null backend, so no
+/// hardware is needed. Returns false on a bad ring, a second device or an
+/// open failure (see DevLastError).
+pub func DevCreate(r: Ring, m: Metrics, null_backend: bool): bool:
+    if devHandle != null or Valid(r) == false:
+        ret false
+    end
+    devRing = r
+    devMetrics = m
+    mut nb := 0
+    if null_backend:
+        nb = 1
+    end
+    devHandle = mizrab_ma_create(mizrab_engine_fill as void *, devRate as u32, devChannels as u32, nb)
+    if devHandle == null:
+        devRing = Ring {}
+        devMetrics = Metrics {}
+        ret false
+    end
+    ret true
+end
+
+@en "DevDestroy"
+/// Stops the device if it runs and releases it. Control thread only; safe to
+/// call without a device.
+pub func DevDestroy():
+    if devHandle == null:
+        ret
+    end
+    DevStop()
+    mizrab_ma_destroy(devHandle)
+    devHandle = null
+    devRing = Ring {}
+    devMetrics = Metrics {}
+end
+
+@en "DevStart"
+/// Starts the callback. Prime the ring first. Returns false on failure.
+pub func DevStart(): bool:
+    if devHandle == null:
+        ret false
+    end
+    if devRunning:
+        ret true
+    end
+    if mizrab_ma_start(devHandle) != 0:
+        ret false
+    end
+    devRunning = true
+    ret true
+end
+
+@en "DevStop"
+/// Stops the callback; returns once it can no longer run. Returns false on
+/// failure.
+pub func DevStop(): bool:
+    if devHandle == null:
+        ret false
+    end
+    if devRunning == false:
+        ret true
+    end
+    if mizrab_ma_stop(devHandle) != 0:
+        ret false
+    end
+    devRunning = false
+    ret true
+end
+
+@en "DevIsRunning"
+/// Reports whether DevStart succeeded and DevStop has not.
+pub func DevIsRunning(): bool:
+    ret devRunning
+end
+
+@en "DevBackendName"
+/// The backend that actually opened ("Core Audio", "ALSA", "Null"), or "none"
+/// without a device.
+pub func DevBackendName(): str:
+    ret mizrab_ma_backend_name(devHandle)
+end
+
+@en "DevLastError"
+/// The description of the last device failure.
+pub func DevLastError(): str:
+    ret mizrab_ma_last_error()
+end
+
+@en "DevSampleRate"
+/// The fixed output sample rate in Hz.
+pub func DevSampleRate(): int:
+    ret devRate
+end
+
+@en "DevChannels"
+/// The fixed output channel count.
+pub func DevChannels(): int:
+    ret devChannels
+end
+
+@en "DevSetVolume"
+/// Sets the device master volume from `percent`, clamped to 0-100. Control
+/// thread only. Returns false without a device or on failure.
+pub func DevSetVolume(percent: int): bool:
+    if devHandle == null:
+        ret false
+    end
+    mut p := percent
+    if p < 0:
+        p = 0
+    end
+    if p > 100:
+        p = 100
+    end
+    ret mizrab_ma_set_volume(devHandle, (p as f32) / 100.0 as f32) == 0
+end
+
+@en "DevGetVolume"
+/// The device master volume as 0-100, or -1 without a device.
+pub func DevGetVolume(): int:
+    if devHandle == null:
+        ret -1
+    end
+    v := mizrab_ma_get_volume(devHandle)
+    if v < 0.0 as f32:
+        ret -1
+    end
+    ret (v * 100.0 as f32 + 0.5 as f32) as int
+end
