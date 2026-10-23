@@ -35,8 +35,8 @@ The harness needs `build/mizrab` and stops if it is missing, which is why `make 
 | --- | --- |
 | `cli_test` | the version constant and the usage string |
 | `ring_test` | the ring buffer and the metric counters: round trip, wrap-around, full and empty rings, a two-thread transfer and the counter snapshot |
-| `decode_test` | the decoder: one fixture per format (WAV, FLAC, MP3, OGG), the duration matrix, failed opens and a seek |
-| `engine_test` | the whole [audio engine](/audio-engine) on miniaudio's null backend: all four formats, the underrun count, volume, seek and the status snapshot |
+| `decode_test` | the decoder: one fixture per format (WAV, FLAC, MP3, OGG), the duration matrix, failed opens, the getters when no decoder is open, a stop and start that matches a straight decode frame for frame, a dead decoder restarted, and seeks (the audio after a seek, and a second request during the drain served once) |
+| `engine_test` | the whole [audio engine](/audio-engine) on miniaudio's null backend: all four formats, the underrun count, volume, seek, the status snapshot, `FillFrames` with no engine open or a bad argument, and `Stop` after `Arm` |
 
 `decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
 

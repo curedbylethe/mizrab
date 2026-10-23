@@ -34,7 +34,7 @@ make build
 make run
 ```
 
-`make build` first compiles the vendored miniaudio and its C glue into `build/` with `cc`, then compiles `main.salam` to `build/mizrab` with `--backend=llvm` and links both objects in; `make run` builds and then runs the binary. At this commit that binary prints its usage block and exits 0. The [audio engine](/audio-engine) is built and tested, but no command plays a file yet, and there is no library scanning or interface. Run `make help` for the short target list, and see [make targets](/make-targets) for the full reference.
+`make build` first compiles the vendored miniaudio and its C glue into `build/` with `cc`, then compiles `main.salam` to `build/mizrab` with `--backend=llvm` and links both objects in; `make run` builds and then runs the binary. At this commit that binary prints its usage block and exits 0. The [audio engine](/audio-engine) is built and tested, but no command plays a file yet: the first playable build arrives when the command line gains a play command. There is no library scanning or interface. Run `make help` for the short target list, and see [make targets](/make-targets) for the full reference.
 
 ## Use a compiler off `PATH`
 

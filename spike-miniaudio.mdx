@@ -90,7 +90,7 @@ Pointers cross the boundary as `void *` (`out as f32 *` recovers the buffer), an
 - `mizrab_ma_destroy(device)` — `ma_device_uninit` then `ma_context_uninit`; joins the audio thread, so main only.
 - `mizrab_ma_last_error()` — the last failure as a string, set from `ma_result_description(result)`.
 - `mizrab_ma_backend_name(device)` — `ma_get_backend_name` of the context that actually opened, so a log distinguishes Core Audio from Null from ALSA.
-- `mizrab_now_ns()` — monotonic nanoseconds for the measurements, because Salam cannot fill a `timespec`.
+- `mizrab_now_ns()` — monotonic nanoseconds for the measurements, because Salam cannot fill a `timespec`. (Removed from `audio/ma_shim.c` later; the engine does not use it.)
 
 The shim holds one `ma_context` and one `ma_device` as statics; the spike plays one stream at a time.
 
@@ -209,7 +209,7 @@ Take `audio/ma_shim.h` and `audio/ma_shim.c` (then `spike/`) essentially as they
 
 - **Linux audible output.** Not verified. The Linux CI step opens the ALSA null plugin, which produces no sound by construction, and it has not run yet. No Linux host was available for this spike.
 - **Linux at all.** Only macOS was run. The Linux leg of CI is written, not observed.
-- **Windows.** Neither WASAPI nor any Windows build was attempted; the shim's `#include <time.h>` and `clock_gettime` are POSIX-only.
+- **Windows.** Neither WASAPI nor any Windows build was attempted; the shim's `#include <time.h>` and `clock_gettime` are POSIX-only. (`<time.h>` and `mizrab_now_ns` were removed from `audio/ma_shim.c` later.)
 - **Non-Core Audio backends.** ALSA, PulseAudio, JACK and sndio are compiled in via `MINIAUDIO_DEFS` but not exercised. The shim calls only backend-agnostic miniaudio entry points, so the risk is in the untested backends, not the shim.
 - **Device hotplug.** Nothing listens for `ma_device_notification_proc`; a device change while playing is unhandled and untested.
 - **M7's effect on a real audio thread under load.** Three prints in 2 s says `println` does not deadlock here; it does not say stdout is real-time safe.

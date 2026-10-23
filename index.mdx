@@ -10,7 +10,7 @@ keywords:
 
 mizrab is a music player built on basalam: a terminal application written in the [Salam](https://github.com/SalamLang/Salam) programming language.
 
-> **Status: audio engine, no player yet.** The [audio engine](/audio-engine) exists: it decodes MP3, FLAC, WAV and OGG, streams them through a lock-free ring buffer to miniaudio's playback callback, and runs headless on miniaudio's null backend, where its tests exercise it. The binary does not use it yet: it answers `--version` and `--help` and prints its usage when invoked bare. There is no playback command, no library scanning and no user interface; the first playable build is a later issue.
+> **Status: audio engine, no player yet.** The [audio engine](/audio-engine) exists: it decodes MP3, FLAC, WAV and OGG, streams them through a lock-free ring buffer to miniaudio's playback callback, and runs headless on miniaudio's null backend, where its tests exercise it. The binary does not use it yet: it answers `--version` and `--help` and prints its usage when invoked bare. There is no playback command, no library scanning and no user interface; the first playable build arrives when the command line gains a play command.
 
 Build it with [install](/install), then see the [make targets](/make-targets), the [test harness](/tests) and the [repository layout](/repository-layout). To work on mizrab, read [contributing](/contributing); the source, issues and releases live on [GitHub](https://github.com/curedbylethe/mizrab).
 
