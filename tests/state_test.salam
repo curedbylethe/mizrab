@@ -19,6 +19,15 @@
 
 import testing
 
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
 include "../player/player.salam"
 
 // A command that is allowed leads to `dest`.
