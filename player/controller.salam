@@ -256,3 +256,35 @@ end
 pub func CurrentPath(): str:
     ret playerCurrent
 end
+
+@en "DurationMs"
+/// The track length in milliseconds, or -1 when no file is open or the format
+/// has no known length (Ogg Vorbis).
+pub func DurationMs(): i64:
+    s := audio.ReadStatus()
+    if s.fillCapacity == 0 or s.lengthKnown == false:
+        ret -1
+    end
+    ret s.lengthFrames * 1000 / playerRate
+end
+
+@en "PositionMs"
+/// How far playback has got, in milliseconds, from decoded frames: the decoder's
+/// stream position minus the frames still queued for the device. -1 when no
+/// file is open.
+pub func PositionMs(): i64:
+    s := audio.ReadStatus()
+    if s.fillCapacity == 0:
+        ret -1
+    end
+    mut frames := audio.DecoderFramesDecoded() - s.fillLevel
+    if frames < 0:
+        frames = 0
+    end
+    mut ms := frames * 1000 / playerRate
+    d := DurationMs()
+    if d >= 0 and ms > d:
+        ms = d
+    end
+    ret ms
+end
