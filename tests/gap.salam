@@ -1,0 +1,66 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The real-backend gap measurement, driven by tests/gap.sh. Not a test: the
+// name has no _test suffix, so tests/run.sh never discovers it, and the number
+// depends on the machine, so nothing asserts it.
+//
+// It queues the WAV and FLAC fixtures, plays the WAV on the default device
+// (Init(false)), seeks to 1 s so only half a second is left, and ticks the player on
+// the real monotonic clock every 5 ms until it has measured the gap from the
+// WAV draining to the FLAC's first played frame. The 5 ms tick period is the
+// resolution of the answer. Prints `backend=<name>` and `gap_ms=<n>`; exit 1 if
+// no gap is measured within ten seconds.
+
+import conv
+import sync
+import time
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+include "../player/player.salam"
+
+func main:
+    player.Init(false)
+    player.QueueAdd("fixtures/tone.wav")
+    player.QueueAdd("fixtures/tone.flac")
+    if player.Play("fixtures/tone.wav") == false or player.Seek(1) == false:
+        println "gap: cannot play: " + player.LastErrorText() + ": " + player.LastErrorDetail()
+        player.Reset()
+        ret 1
+    end
+    println "backend=" + audio.ReadStatus().backend
+    deadline := time.MonoMillis() + 10000
+    until player.LastGapMs() < 0 and time.MonoMillis() < deadline:
+        sync.SleepMs(5)
+        player.Tick(time.MonoMillis())
+    end
+    gap := player.LastGapMs()
+    player.Reset()
+    if gap < 0:
+        println "gap: no gap measured"
+        ret 1
+    end
+    println "gap_ms=" + conv.FormatInt(gap)
+    ret 0
+end
