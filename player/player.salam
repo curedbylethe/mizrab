@@ -1,0 +1,56 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The playback controller: a headless player over the audio engine. Package
+// player is every player/*.salam file merged; this file is the entry point and
+// owns the scalar state. The engine is a singleton (one file, one device), so
+// the controller is one too and its state lives in package globals.
+//
+//   state.salam   the states, the commands and the transition table
+//   errors.salam  the error codes, their text and the last-error record
+//
+// Imports nothing above the engine: no basalam, no terminal, no library.
+
+package player
+
+mut playerState := State.Idle
+mut playerError := ErrorCode.None
+mut playerDetail := ""
+mut playerNullBackend := false
+mut playerVolume := 100
+
+@en "Init"
+/// Starts a fresh player. `nullBackend` selects miniaudio's null device, which
+/// tests use so no audio hardware is needed; the app passes false. Sets the
+/// state to idle, clears the last error and sets the volume to 100.
+pub func Init(nullBackend: bool):
+    playerNullBackend = nullBackend
+    playerVolume = 100
+    Reset()
+end
+
+@en "Reset"
+/// Returns the player to idle and clears the last error. Leaves the volume and
+/// the backend mode alone. Tests call it between cases.
+pub func Reset():
+    playerState = State.Idle
+    clearError()
+end
+
+@en "CurrentState"
+/// The current playback state.
+pub func CurrentState(): State:
+    ret playerState
+end
