@@ -331,8 +331,8 @@ pub func Tick(nowMs: i64):
     end
     if s.decodeErrors > playerDecodeBase:
         setError(ErrorCode.DecodeFailure, audio.DecoderLastError())
-        playerState = State.Error
         audio.Stop()
+        fail()
         ret
     end
     if s.atEnd and s.fillLevel == 0:

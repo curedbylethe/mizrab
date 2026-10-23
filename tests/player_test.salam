@@ -199,11 +199,26 @@ func main:
     testing.AssertTrue(player.DurationMs() > 0)
     testing.AssertTrue(player.Stop())
 
+    // A decode error found by Tick parks the player in error with nothing
+    // loaded. Ogg has no known length, so a seek far past the end is accepted
+    // and then fails inside the decoder.
+    testing.AssertTrue(player.Play("fixtures/tone.ogg"))
+    testing.AssertTrue(player.Seek(300))
+    mut deadline := time.MonoMillis() + 3000
+    until playing() and time.MonoMillis() < deadline:
+        sync.SleepMs(5)
+        player.Tick(time.MonoMillis())
+    end
+    inState("error")
+    testing.AssertEqStr(player.LastErrorText(), "could not decode this file")
+    testing.AssertEqStr(player.CurrentPath(), "")
+    testing.AssertEqInt64(player.PositionMs(), -1)
+
     // The end of a track: Tick sees the stream drain and the state becomes
     // ended. Seeking to one second leaves half a second to play.
     testing.AssertTrue(player.Play("fixtures/tone.wav"))
     testing.AssertTrue(player.Seek(1))
-    deadline := time.MonoMillis() + 3000
+    deadline = time.MonoMillis() + 3000
     until playing() and time.MonoMillis() < deadline:
         sync.SleepMs(5)
         player.Tick(time.MonoMillis())
