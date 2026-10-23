@@ -1,0 +1,319 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the queue and end-of-track advancement on miniaudio's null backend:
+// order, bounds, repeat modes, a seeded shuffle, the automatic advance a Tick
+// performs and the gap it measures. The clock is a number the test passes to
+// Tick, so every gap assertion is exact. The only real waits are bounded polls
+// on the engine's frame counters, and the longest is the half second left of a
+// track after a seek to one second.
+
+import sync
+import testing
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+include "../player/player.salam"
+
+wav := "fixtures/tone.wav"
+flac := "fixtures/tone.flac"
+mp3 := "fixtures/tone.mp3"
+
+func inState(name: str):
+    testing.AssertEqStr(player.StateName(player.CurrentState()), name)
+end
+
+// A queue command that must be refused: false, `detail` recorded as a bad
+// argument, and the state and the playing track unchanged.
+func refused(got: bool, detail: str, name: str, path: str):
+    testing.AssertFalse(got)
+    inState(name)
+    testing.AssertEqStr(player.CurrentPath(), path)
+    testing.AssertEqStr(player.TextFor(player.LastError()), "invalid command argument")
+    testing.AssertEqStr(player.LastErrorDetail(), detail)
+end
+
+// Back to an idle player with an empty queue, repeat off and shuffle off.
+func fresh():
+    player.Reset()
+    player.QueueClear()
+    player.SetRepeat(player.RepeatMode.Off)
+    player.SetShuffle(false)
+end
+
+// Fills the queue with the three fixtures, in this order.
+func threeTracks():
+    player.QueueAdd(wav)
+    player.QueueAdd(flac)
+    player.QueueAdd(mp3)
+end
+
+// True while the playing track has not yet drained to the device.
+func draining(): bool:
+    s := audio.ReadStatus()
+    ret s.atEnd == false or s.fillLevel > 0
+end
+
+// Seeks the playing track to one second and waits, without ticking, until it
+// has drained: the next Tick is then the one that sees the end.
+func playOut():
+    testing.AssertTrue(player.Seek(1))
+    mut n := 0
+    until draining() and n < 4000:
+        sync.SleepMs(1)
+        n = n + 1
+    end
+    testing.AssertFalse(draining())
+end
+
+// Waits, without ticking, for the track just started to play a frame beyond
+// the ones it had already played when this was called.
+func firstFrame():
+    seen := audio.ReadStatus().framesPlayed
+    mut n := 0
+    until audio.ReadStatus().framesPlayed == seen and n < 3000:
+        sync.SleepMs(1)
+        n = n + 1
+    end
+    testing.AssertTrue(audio.ReadStatus().framesPlayed > seen)
+end
+
+func main:
+    player.Init(true)
+    testing.AssertEqInt64(player.LastGapMs(), -1)
+    testing.AssertEqInt(player.QueueLen(), 0)
+    testing.AssertEqInt(player.QueueIndex(), 0)
+    testing.AssertEqStr(player.QueueAt(0), "")
+    testing.AssertTrue(player.Repeat() == player.RepeatMode.Off)
+    testing.AssertFalse(player.Shuffle())
+
+    // The table comes first: nothing to skip in idle. With a track playing but
+    // no queue, next and prev say the queue is empty.
+    refused(player.Next(), "command not allowed in state idle", "idle", "")
+    refused(player.Prev(), "command not allowed in state idle", "idle", "")
+    testing.AssertTrue(player.Play(wav))
+    refused(player.Next(), "queue is empty", "playing", wav)
+    refused(player.Prev(), "queue is empty", "playing", wav)
+    testing.AssertEqInt64(player.LastGapMs(), -1)
+
+    // The queue keeps order; the index is bounds checked.
+    fresh()
+    threeTracks()
+    testing.AssertEqInt(player.QueueLen(), 3)
+    testing.AssertEqStr(player.QueueAt(0), wav)
+    testing.AssertEqStr(player.QueueAt(1), flac)
+    testing.AssertEqStr(player.QueueAt(2), mp3)
+    testing.AssertEqStr(player.QueueAt(3), "")
+    testing.AssertEqStr(player.QueueAt(-1), "")
+    testing.AssertFalse(player.QueueSetIndex(3))
+    testing.AssertFalse(player.QueueSetIndex(-1))
+    testing.AssertEqInt(player.QueueIndex(), 0)
+    testing.AssertTrue(player.QueueSetIndex(2))
+    testing.AssertEqInt(player.QueueIndex(), 2)
+    testing.AssertTrue(player.QueueSetIndex(0))
+
+    // Linear next and prev with repeat off: the state follows each path, and
+    // either end is a refusal that changes nothing.
+    testing.AssertTrue(player.Play(wav))
+    testing.AssertTrue(player.Next())
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), flac)
+    testing.AssertEqInt(player.QueueIndex(), 1)
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), mp3)
+    refused(player.Next(), "end of queue", "playing", mp3)
+    testing.AssertEqInt(player.QueueIndex(), 2)
+    testing.AssertTrue(player.Prev())
+    testing.AssertEqStr(player.CurrentPath(), flac)
+    testing.AssertTrue(player.Prev())
+    testing.AssertEqStr(player.CurrentPath(), wav)
+    refused(player.Prev(), "start of queue", "playing", wav)
+    testing.AssertEqInt(player.QueueIndex(), 0)
+
+    // Repeat all wraps both ways; repeat one leaves an explicit next alone.
+    player.SetRepeat(player.RepeatMode.All)
+    testing.AssertTrue(player.Prev())
+    testing.AssertEqStr(player.CurrentPath(), mp3)
+    testing.AssertEqInt(player.QueueIndex(), 2)
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), wav)
+    testing.AssertEqInt(player.QueueIndex(), 0)
+    player.SetRepeat(player.RepeatMode.One)
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), flac)
+    player.SetRepeat(player.RepeatMode.Off)
+
+    // Play makes a queued path current; any other path leaves the index alone.
+    testing.AssertTrue(player.Play(mp3))
+    testing.AssertEqInt(player.QueueIndex(), 2)
+    testing.AssertTrue(player.Play("fixtures/tone.ogg"))
+    testing.AssertEqInt(player.QueueIndex(), 2)
+    testing.AssertEqInt(player.QueueLen(), 3)
+    testing.AssertEqStr(player.QueueAt(2), mp3)
+
+    // The index moves before the open, so a bad entry is skipped by the next
+    // move. Next and prev are allowed from error.
+    player.QueueAdd("fixtures/missing.wav")
+    testing.AssertTrue(player.Play(mp3))
+    testing.AssertFalse(player.Next())
+    inState("error")
+    testing.AssertEqStr(player.LastErrorText(), "file not found")
+    testing.AssertEqInt(player.QueueIndex(), 3)
+    testing.AssertTrue(player.Prev())
+    testing.AssertEqStr(player.CurrentPath(), mp3)
+
+    // Stop leaves the queue alone, and play works after it.
+    testing.AssertTrue(player.Stop())
+    inState("stopped")
+    testing.AssertEqInt(player.QueueLen(), 4)
+    testing.AssertTrue(player.Play(player.QueueAt(0)))
+    inState("playing")
+    testing.AssertEqInt(player.QueueIndex(), 0)
+
+    // Shuffle: Next walks a deck that holds each track once, current first;
+    // the same seed deals the same order; the end is refused unless repeating.
+    fresh()
+    threeTracks()
+    player.SetShuffleSeed(1)
+    player.SetShuffle(true)
+    testing.AssertTrue(player.Shuffle())
+    testing.AssertTrue(player.Play(wav))
+    testing.AssertTrue(player.Next())
+    first := player.CurrentPath()
+    testing.AssertTrue(player.Next())
+    second := player.CurrentPath()
+    refused(player.Next(), "end of queue", "playing", second)
+    testing.AssertTrue(first != wav and second != wav and first != second)
+    testing.AssertEqStr(first, mp3)
+    testing.AssertEqStr(second, flac)
+    testing.AssertTrue(player.QueueSetIndex(0))
+    player.SetShuffleSeed(1)
+    testing.AssertTrue(player.Play(wav))
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), first)
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), second)
+    testing.AssertTrue(player.QueueSetIndex(0))
+    player.SetShuffleSeed(4)
+    testing.AssertTrue(player.Play(wav))
+    testing.AssertTrue(player.Next())
+    testing.AssertEqStr(player.CurrentPath(), flac)
+    testing.AssertTrue(player.Next())
+    player.SetRepeat(player.RepeatMode.All)
+    testing.AssertTrue(player.Next())
+    testing.AssertEqInt(player.QueueLen(), 3)
+    testing.AssertEqStr(player.QueueAt(player.QueueIndex()), player.CurrentPath())
+
+    // Repeat one: the end of the track replays it with no command. The Tick
+    // that sees the drain stamps the time; the Tick after the first played
+    // frame closes the gap at exactly the difference of the two clocks.
+    fresh()
+    player.QueueAdd(wav)
+    player.SetRepeat(player.RepeatMode.One)
+    testing.AssertTrue(player.Play(wav))
+    playOut()
+    player.Tick(1000)
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), wav)
+    testing.AssertEqInt64(player.LastGapMs(), -1)
+    firstFrame()
+    player.Tick(1350)
+    testing.AssertEqInt64(player.LastGapMs(), 350)
+    player.Tick(9000)
+    testing.AssertEqInt64(player.LastGapMs(), 350)
+
+    // A pause drops a gap still in progress, so the pause is not measured.
+    playOut()
+    player.Tick(2000)
+    testing.AssertTrue(player.Pause())
+    testing.AssertTrue(player.Resume())
+    firstFrame()
+    player.Tick(9000)
+    testing.AssertEqInt64(player.LastGapMs(), 350)
+
+    // Repeat all: the last track's end wraps to the first.
+    fresh()
+    player.QueueAdd(wav)
+    player.QueueAdd(flac)
+    player.SetRepeat(player.RepeatMode.All)
+    testing.AssertTrue(player.Play(flac))
+    testing.AssertEqInt(player.QueueIndex(), 1)
+    playOut()
+    player.Tick(5000)
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), wav)
+    testing.AssertEqInt(player.QueueIndex(), 0)
+    firstFrame()
+    player.Tick(5100)
+    testing.AssertEqInt64(player.LastGapMs(), 100)
+
+    // Repeat off: the first end advances, the second ends playback and keeps
+    // the first measurement; a next from ended has nowhere to go.
+    fresh()
+    player.QueueAdd(wav)
+    player.QueueAdd(flac)
+    testing.AssertTrue(player.Play(wav))
+    playOut()
+    player.Tick(100)
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), flac)
+    firstFrame()
+    player.Tick(450)
+    testing.AssertEqInt64(player.LastGapMs(), 350)
+    playOut()
+    player.Tick(900)
+    inState("ended")
+    testing.AssertEqInt64(player.LastGapMs(), 350)
+    testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
+    refused(player.Next(), "end of queue", "ended", flac)
+    testing.AssertTrue(player.Toggle())
+    inState("playing")
+    testing.AssertEqStr(player.CurrentPath(), flac)
+
+    // A next track that cannot open ends in error and records no gap.
+    fresh()
+    player.QueueAdd(wav)
+    player.QueueAdd("fixtures/missing.wav")
+    testing.AssertTrue(player.Play(wav))
+    playOut()
+    player.Tick(100)
+    inState("error")
+    testing.AssertEqStr(player.LastErrorText(), "file not found")
+    testing.AssertEqInt64(player.LastGapMs(), -1)
+    testing.AssertEqInt64(audio.ReadStatus().fillCapacity, 0)
+
+    // Reset clears the measurement but not the queue.
+    fresh()
+    player.QueueAdd(wav)
+    player.SetRepeat(player.RepeatMode.One)
+    testing.AssertTrue(player.Play(wav))
+    playOut()
+    player.Tick(10)
+    firstFrame()
+    player.Tick(20)
+    testing.AssertEqInt64(player.LastGapMs(), 10)
+    player.Reset()
+    testing.AssertEqInt64(player.LastGapMs(), -1)
+    testing.AssertEqInt(player.QueueLen(), 1)
+    ret testing.Summary()
+end
