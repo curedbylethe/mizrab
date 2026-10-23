@@ -10,7 +10,6 @@ commands/
 config/
 library/
 player/
-spike/
 tests/
 ui/
 vendor/

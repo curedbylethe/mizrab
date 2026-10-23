@@ -20,7 +20,7 @@
 #include <string.h>
 #include <time.h>
 
-/* One device and one context: the spike plays one stream at a time. */
+/* One device and one context: the engine plays one stream at a time. */
 static ma_context g_context;
 static ma_device g_device;
 static int g_context_ready = 0;

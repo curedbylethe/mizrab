@@ -52,23 +52,6 @@ jobs:
       - name: make test
         run: make test
 
-      # The Linux leg opens a real ALSA PCM whose device is the ALSA null
-      # plugin, so the callback runs under miniaudio's ALSA backend rather than
-      # miniaudio's own timer. A missing libasound must fail the step, so there
-      # is no --null fallback here.
-      - name: Configure a null ALSA default PCM
-        if: runner.os == 'Linux'
-        run: |
-          printf 'pcm.!default { type null }\nctl.!default { type null }\n' > "$HOME/.asoundrc"
-
-      - name: make spike-check-device
-        if: runner.os == 'Linux'
-        run: make spike-check-device
-
-      - name: make spike-check
-        if: runner.os == 'macOS'
-        run: make spike-check
-
   docs:
     runs-on: ubuntu-latest
     env:
