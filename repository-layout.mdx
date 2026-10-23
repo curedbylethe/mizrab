@@ -8,19 +8,18 @@ keywords:
   - "tree"
 ---
 
-mizrab is one Salam program plus the vendored miniaudio sources, a test corpus, the spike that proved miniaudio's callback works from Salam, and the files for this documentation site, all at the repository root.
+mizrab is one Salam program plus the audio engine and the vendored C it drives, a test corpus, and the files for this documentation site, all at the repository root.
 
 | Path | Contents |
 | --- | --- |
 | `main.salam` | Entry point: flag parsing, `--version`, `--help` and the usage block |
 | `commands/` | Command layer: the version constant and the usage string |
-| `audio/` | Vendored miniaudio 0.11.25 as `miniaudio.h` plus the two-line `miniaudio.c` implementation unit; playback belongs here |
-| `spike/` | The miniaudio FFI spike: `tone.salam`, the `ma_shim.{h,c}` glue, the `measure.salam` / `measure.sh` harness and `probe_struct.salam` |
-| `player/` | Reserved for playback state and control; holds only `.gitkeep` |
+| `audio/` | Vendored miniaudio and stb_vorbis plus the decode/ring/device engine: `miniaudio.h`, `stb_vorbis.c` and the `miniaudio.c` implementation unit that includes both; the C glue `ma_shim.{h,c}`; and the Salam package `audio` (`audio.salam` entry file, `decoder.salam`, `ring.salam`, `metrics.salam`, `device.salam`). See [the audio engine](/audio-engine) |
+| `player/` | Reserved for the playback state machine and queue, a later issue that builds on the engine in `audio/`; holds only `.gitkeep` |
 | `library/` | Reserved for library scanning and metadata; holds only `.gitkeep` |
 | `config/` | Reserved for configuration loading; holds only `.gitkeep` |
 | `ui/` | Reserved for the basalam-based terminal interface; holds only `.gitkeep` |
-| `tests/` | `cli_test.salam`, its `cli_test.out` golden and the `run.sh` harness |
+| `tests/` | The `*_test.salam` programs with their `.out` goldens (`cli`, `ring`, `decode`, `engine`), the `run.sh` harness, the `soak.salam` / `soak.sh` pair behind `make soak`, and `fixtures/`, one small audio file per decoder format with its provenance |
 | `vendor/basalam/` | The pinned basalam submodule, checked out at the `v0.2.0` release tag's commit |
 | `index.mdx` | Site page: introduction, status and what mizrab is built on |
 | `install.mdx` | Site page: prerequisites, clone, build and run |
@@ -28,6 +27,7 @@ mizrab is one Salam program plus the vendored miniaudio sources, a test corpus, 
 | `tests.mdx` | Site page: the test harness convention and how to add a test |
 | `repository-layout.mdx` | Site page: this page |
 | `contributing.mdx` | Site page: code style, commits, pins and upstream findings |
+| `audio-engine.mdx` | Site page: the audio engine, its policies and its record |
 | `spike-miniaudio.mdx` | Site page: the miniaudio spike findings |
 | `docs.json` | Mintlify config: navigation, logo, colours, navbar and footer |
 | `.mintignore` | Trees the Mintlify CLI must not format or link-check |
@@ -37,9 +37,13 @@ mizrab is one Salam program plus the vendored miniaudio sources, a test corpus, 
 | `Makefile` | Every developer task; see [make targets](/make-targets) |
 | `README.md`, `CONTRIBUTING.md` | The GitHub entry points; both link here for the detail |
 | `LICENSE` | The full GPL-3.0-or-later text |
-| `.github/workflows/ci.yml` | CI: the Salam pin, `make fmt-check`, `make build`, `make test` and the spike check on Ubuntu and macOS, plus the docs job that runs `make docs-format-check` and `make docs-check` |
+| `.github/workflows/ci.yml` | CI: the Salam pin, `make fmt-check`, `make build` and `make test` (which includes the engine test on the null backend) on Ubuntu and macOS, plus the docs job that runs `make docs-format-check` and `make docs-check` |
 
 `player/`, `library/`, `config/` and `ui/` are reserved and empty apart from a `.gitkeep` each. Nothing in the current build reads them.
+
+Playback is split across two directories. `audio/` is the substrate: decoding, the ring buffer and the device. `player/` is reserved for what sits above it, the playback state machine and queue, which does not exist yet.
+
+The CI legs run the engine test on miniaudio's null backend as part of `make test`, so they need neither a sound card nor an ALSA configuration. `make soak` is not run in CI.
 
 The documentation site lives at the repository root, not in a `docs/` directory: Mintlify resolves page paths against the directory that holds `docs.json`, so a page at `docs/index` would serve `/docs/...` and leave the site root empty.
 

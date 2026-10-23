@@ -14,7 +14,7 @@ mizrab's tests follow the convention of Salam's own test corpus and of basalam: 
 ## Convention
 
 - `tests/<name>_test.salam` is a normal program. It asserts with `std/testing` and ends with `ret testing.Summary()`, whose return value is the exit code.
-- `tests/<name>_test.out` is the exact expected stdout. Today that is the `--` separator line and the `tests: 2 passed, 0 failed` summary, for `tests/cli_test.out`.
+- `tests/<name>_test.out` is the exact expected stdout: the `--` separator line and the `tests: N passed, M failed` summary. For `tests/cli_test.out` that is `tests: 2 passed, 0 failed`.
 
 A test passes when it builds, exits 0, and its stdout matches the golden byte for byte.
 
@@ -22,12 +22,23 @@ A test passes when it builds, exits 0, and its stdout matches the golden byte fo
 
 For each test program, `tests/run.sh`:
 
-1. builds `tests/<name>_test.salam` into `build/tests/<name>` with `--backend=llvm --log-level=warn`;
+1. builds `tests/<name>_test.salam` into `build/tests/<name>` with `--backend=llvm --log-level=warn`, from inside `tests/`: the compiler checks a `link static` path against the source file's directory but hands it to the linker from the working directory, so the two agree only there;
 2. runs it with an empty stdin, so a test that reads the terminal cannot pick up input;
 3. bounds the run with a 30-second watchdog, so a hung test fails instead of stalling the suite; `TEST_TIMEOUT` in seconds overrides the bound;
 4. fails on a non-zero exit code, a timeout, or a `diff -u` mismatch against the golden.
 
 The harness needs `build/mizrab` and stops if it is missing, which is why `make test` builds first. Calling the harness directly needs a prior `make build`.
+
+## The test programs
+
+| Test | Covers |
+| --- | --- |
+| `cli_test` | the version constant and the usage string |
+| `ring_test` | the ring buffer and the metric counters: round trip, wrap-around, full and empty rings, a two-thread transfer and the counter snapshot |
+| `decode_test` | the decoder: one fixture per format (WAV, FLAC, MP3, OGG), the duration matrix, failed opens and a seek |
+| `engine_test` | the whole [audio engine](/audio-engine) on miniaudio's null backend: all four formats, the underrun count, volume, seek and the status snapshot |
+
+`decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
 
 ## The binary smoke checks
 
