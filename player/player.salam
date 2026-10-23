@@ -33,9 +33,10 @@ mut playerNullBackend := false
 mut playerVolume := 100
 
 @en "Init"
-/// Starts a fresh player. `nullBackend` selects miniaudio's null device, which
-/// tests use so no audio hardware is needed; the app passes false. Sets the
-/// state to idle, clears the last error and sets the volume to 100.
+/// Returns the player to idle. `nullBackend` selects miniaudio's null device,
+/// which tests use so no audio hardware is needed; the app passes false. Sets
+/// the volume to 100 and calls `Reset`, so the queue, repeat mode and shuffle
+/// are left as they were.
 pub func Init(nullBackend: bool):
     playerNullBackend = nullBackend
     playerVolume = 100
