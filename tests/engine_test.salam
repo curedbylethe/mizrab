@@ -1,0 +1,192 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the engine end to end with no audio hardware. The device legs run on
+// miniaudio's null backend, which is paced by the wall clock, so they assert
+// only facts that do not depend on timing. Exact accounting is done on the
+// direct path: Arm creates the device without starting its callback, the test
+// stops the producer and calls FillFrames by hand against a ring whose content
+// is known.
+
+import mem
+import sync
+import testing
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+
+ringFrames := 16384 as i64
+
+func newBuf(frames: i64): f32*:
+    ret mem.AllocateZeroed((frames * 2 * 4) as u64) as f32*
+end
+
+// Sets every sample of `buf` to 1.0 so a fill that skips the silence shows.
+func dirty(buf: f32*, frames: i64):
+    mut i := 0 as i64
+    until i < frames * 2:
+        buf[i] = 1.0 as f32
+        i = i + 1
+    end
+end
+
+// Reports whether every sample of `buf` is zero.
+func silent(buf: f32*, frames: i64): bool:
+    mut i := 0 as i64
+    until i < frames * 2:
+        if buf[i] != 0.0 as f32:
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+// Waits up to two seconds for the seek in flight to complete.
+func waitSeek():
+    mut idle := 0
+    until audio.DecoderSeekPending() and idle < 2000:
+        sync.SleepMs(1)
+        idle = idle + 1
+    end
+end
+
+// Plays `path` on the null device for a short while and checks the facts that
+// hold for every format.
+func endToEnd(path: str, lengthKnown: bool):
+    testing.AssertTrue(audio.Open(path))
+    testing.AssertTrue(audio.Start(true))
+    sync.SleepMs(300)
+    mut idle := 0
+    until audio.ReadStatus().framesPlayed == 0 and idle < 2000:
+        sync.SleepMs(1)
+        idle = idle + 1
+    end
+    s := audio.ReadStatus()
+    testing.AssertEqStr(s.backend, "Null")
+    testing.AssertTrue(s.framesPlayed > 0)
+    testing.AssertTrue(s.framesDecoded > 0)
+    testing.AssertTrue(s.fillLevel >= 0 and s.fillLevel <= s.fillCapacity)
+    testing.AssertEqInt64(s.fillCapacity, ringFrames)
+    testing.AssertEqInt(s.sampleRate, 48000)
+    testing.AssertEqInt(s.channels, 2)
+    testing.AssertEqBool(s.lengthKnown, lengthKnown)
+    testing.AssertEqInt64(s.decodeErrors, 0)
+    testing.AssertEqInt64(s.seeks, 0)
+    audio.Stop()
+    audio.Close()
+end
+
+func main:
+    // Nothing open: every verb is inert and the status is empty.
+    idleStatus := audio.ReadStatus()
+    testing.AssertEqStr(idleStatus.backend, "none")
+    testing.AssertEqInt64(idleStatus.fillCapacity, 0)
+    testing.AssertFalse(audio.Start(true))
+    testing.AssertFalse(audio.Seek(0))
+    testing.AssertFalse(audio.SetVolume(50))
+    testing.AssertEqInt(audio.GetVolume(), -1)
+    audio.Stop()
+    audio.Close()
+
+    // A missing or undecodable file leaves nothing allocated or open.
+    testing.AssertFalse(audio.Open("fixtures/missing.wav"))
+    testing.AssertFalse(audio.Open("fixtures/README.md"))
+    testing.AssertEqInt64(audio.ReadStatus().fillCapacity, 0)
+    testing.AssertFalse(audio.Start(true))
+
+    // The whole path, one fixture per format.
+    endToEnd("fixtures/tone.wav", true)
+    endToEnd("fixtures/tone.flac", true)
+    endToEnd("fixtures/tone.mp3", true)
+    endToEnd("fixtures/tone.ogg", false)
+
+    // Direct path. Arm primes the ring to capacity and creates the device
+    // without starting it; stopping the producer then freezes the ring at
+    // exactly 16384 frames and the test is the only consumer.
+    testing.AssertTrue(audio.Open("fixtures/tone.wav"))
+    testing.AssertFalse(audio.Seek(0))
+    testing.AssertTrue(audio.Arm(true))
+    testing.AssertFalse(audio.Arm(true))
+    audio.DecoderStop()
+    buf := newBuf(8192)
+    before := audio.ReadStatus()
+    testing.AssertEqInt64(before.fillLevel, ringFrames)
+    testing.AssertTrue(before.framesDecoded >= ringFrames)
+    testing.AssertEqInt64(before.framesPlayed, 0)
+    testing.AssertEqInt64(before.underruns, 0)
+
+    // Pre-filled: frames_played is the sum of the frames requested.
+    dirty(buf, 8192)
+    audio.FillFrames(buf, 1000)
+    audio.FillFrames(buf, 3000)
+    audio.FillFrames(buf, 5000)
+    audio.FillFrames(buf, 7384)
+    mid := audio.ReadStatus()
+    testing.AssertEqInt64(mid.framesPlayed, 16384)
+    testing.AssertEqInt64(mid.underruns, 0)
+    testing.AssertEqInt64(mid.fillLevel, 0)
+
+    // Starved: nothing played, and the underrun count grows by exactly the
+    // shortfall; the buffer is silence.
+    dirty(buf, 8192)
+    audio.FillFrames(buf, 512)
+    testing.AssertTrue(silent(buf, 512))
+    audio.FillFrames(buf, 8192)
+    testing.AssertTrue(silent(buf, 8192))
+    after := audio.ReadStatus()
+    testing.AssertEqInt64(after.framesPlayed, 16384)
+    testing.AssertEqInt64(after.underruns, 8704)
+    mem.Free(buf as void*)
+
+    // Stop is repeatable; Close is idempotent.
+    audio.Stop()
+    audio.Stop()
+    audio.Close()
+    audio.Close()
+    testing.AssertEqStr(audio.ReadStatus().backend, "none")
+
+    // Seek and volume through the engine while the null device drains the
+    // ring. The WAV is 72000 frames at 48 kHz, so frame 24000 is valid.
+    testing.AssertTrue(audio.Open("fixtures/tone.wav"))
+    testing.AssertTrue(audio.Start(true))
+    testing.AssertTrue(audio.DevIsRunning())
+    testing.AssertFalse(audio.Start(true))
+    testing.AssertEqInt(audio.GetVolume(), 100)
+    testing.AssertTrue(audio.SetVolume(40))
+    testing.AssertEqInt(audio.GetVolume(), 40)
+    testing.AssertTrue(audio.SetVolume(250))
+    testing.AssertEqInt(audio.GetVolume(), 100)
+    testing.AssertTrue(audio.SetVolume(0))
+    testing.AssertEqInt(audio.GetVolume(), 0)
+    testing.AssertFalse(audio.Seek(72001))
+    testing.AssertTrue(audio.Seek(24000))
+    waitSeek()
+    testing.AssertFalse(audio.DecoderSeekPending())
+    testing.AssertEqInt64(audio.ReadStatus().seeks, 1)
+    testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
+    audio.Close()
+    testing.AssertEqInt(audio.GetVolume(), -1)
+    testing.AssertFalse(audio.DevIsRunning())
+    ret testing.Summary()
+end
