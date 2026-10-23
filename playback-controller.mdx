@@ -1,0 +1,177 @@
+---
+title: "Playback controller"
+description: "How the mizrab playback controller works: its states and transition rules, commands, frame-derived position and duration, queue and shuffle, end-of-track advance, error taxonomy and limits."
+keywords:
+  - "player"
+  - "playback"
+  - "controller"
+  - "state machine"
+  - "queue"
+  - "shuffle"
+  - "errors"
+---
+
+The playback controller is the headless layer above [the audio engine](/audio-engine): it owns the playback state, the commands, the position and duration, the play queue and the error taxonomy. It lives in `player/` as the Salam package `player` (every `player/*.salam` file merged): `player.salam` is the entry file and holds the scalar state, `state.salam` the states and the transition table, `errors.salam` the error codes and their text, `controller.salam` the commands and `queue.salam` the queue. This page is its contract: what each command does in each state, how position is derived, how the queue behaves and what the controller cannot do.
+
+## Status
+
+The controller exists and is fully tested headless, on miniaudio's null backend with a caller-supplied clock. The binary does not use it yet: `main.salam` does not include `player/`, so there is still no play command and no user interface, and the binary cannot play music. The package includes only the engine and the Salam standard library; it has no basalam import and nothing above the engine.
+
+## States
+
+| State | Meaning |
+| --- | --- |
+| `idle` | Nothing has been played since `Init` or `Reset`. |
+| `loading` | A track is being opened. Transient: see below. |
+| `playing` | The device is running and a file is open. |
+| `paused` | The device is stopped and the file stays open at its position. |
+| `stopped` | `Stop` released the file. |
+| `ended` | The last track drained and nothing follows it. |
+| `error` | The last `Play`, `Next`, `Prev`, `Resume` or `Tick` failed. The last error says why. |
+
+**`loading` is never seen by a caller.** The engine opens a file synchronously and the controller is single-threaded, so `Play` enters `loading` and leaves it inside the same call. `CurrentState()` returns `playing` or `error` when `Play` returns. The state and its transitions are still defined and asserted, and it accepts no command of its own.
+
+**A rejected command returns false and changes nothing.** The state, the file and the position are untouched. The only effect is the last error: code `BadArgument` (text "invalid command argument") with the detail "command not allowed in state" followed by the state name. Every command consults the transition table before it touches the engine. `NextState(state, command)` in `state.salam` is that table as a pure function, and `tests/state_test.salam` asserts all 63 state and command pairs.
+
+## Commands
+
+| Command | Accepted in | Result |
+| --- | --- | --- |
+| `Play(path)` | every state except `loading` | `loading`, then `playing` or `error`. Replaces whatever was playing. |
+| `Toggle()` | `playing`, `paused`, `ended` | `playing` becomes `paused`, `paused` becomes `playing`, `ended` replays the last track from the start. |
+| `Pause()` | `playing` | `paused`. The engine is stopped, not closed, and no decoded audio is lost. |
+| `Resume()` | `paused` | `playing`, or `error` if the device does not start. |
+| `Stop()` | `playing`, `paused`, `ended`, `error` | `stopped`. Releases the file; position and duration become -1. |
+| `Seek(seconds)` | `playing` | stays `playing`. See [seek](#seek). |
+| `Next()` | `playing`, `paused`, `stopped`, `ended`, `error` | Plays the next queue entry: `playing` or `error`. |
+| `Prev()` | `playing`, `paused`, `stopped`, `ended`, `error` | Plays the previous queue entry: `playing` or `error`. |
+| `SetVolume(percent)` / `GetVolume()` | every state except `loading` | State unchanged. |
+
+`Init(nullBackend)`, `Reset()` and `Tick(nowMs)` are lifecycle calls, not user commands, and the table does not apply to them. `Init` selects the real device or miniaudio's null device, sets the volume to 100 and calls `Reset`. `Reset` closes the engine, returns to `idle`, and clears the last error and the measured gap; it leaves the volume, the backend choice and the queue alone. `Tick` is described under [end of track](#end-of-track).
+
+- **`Next` and `Prev` are queue commands as well.** The table accepts them in the five states above and rejects them in `idle`. When the table accepts them, they are rejected with `BadArgument` and the detail "queue is empty", "end of queue" (`Next` on the last entry with repeat Off) or "start of queue" (`Prev` on entry 0 with repeat Off). The state is unchanged.
+- **`Toggle` in `stopped`, `idle` and `error` is rejected.** There is no paused track to resume. Use `Play`.
+- **`SetVolume` takes 0 to 100.** Anything else returns false with `BadArgument` and the detail "volume must be 0 to 100". The volume is stored and applied to the device when one exists and again at each start, so it can be set before the first `Play`. `GetVolume()` returns the stored request.
+- **Pause is the engine's `Stop`.** A pause and a resume therefore lose no audio; the engine's [Stop and Start policy](/audio-engine#policies) covers why.
+
+## Position and duration
+
+`PositionMs()` is derived from decoded frames. No wall clock is read.
+
+```text
+max(0, DecoderFramesDecoded - fillLevel) * 1000 / 48000
+```
+
+`DecoderFramesDecoded` is the decoder's stream position, which resets to the seek target after a seek. The decoder runs ahead of the device, so the ring holds frames that are decoded but not yet played, and `fillLevel` is how many. Subtracting it leaves the frames the device has taken. The lifetime counter `Status.framesDecoded` is not used, because a seek does not reset it. When the duration is known the position is clamped to it. The result is in milliseconds at the engine's fixed 48000 Hz. It does not account for latency inside the output device itself, which the engine cannot see.
+
+`DurationMs()` is `lengthFrames * 1000 / 48000` when the engine knows the length and **-1** otherwise. Both return -1 when no file is open.
+
+| Format | `DurationMs()` | `PositionMs()` |
+| --- | --- | --- |
+| WAV | known | known |
+| FLAC | known | known |
+| MP3 | known | known |
+| OGG | -1 | known |
+
+OGG has no duration because the engine reports its length as unknown by design; see [the duration matrix](/audio-engine#duration). The controller does not guess one, and the queue never needs one: it advances on the engine's drain condition, not on a comparison with the duration.
+
+### Seek
+
+`Seek(seconds)` takes whole seconds and works **only while playing**. The engine performs a seek on the decoder thread and needs the device callback running to drain the ring, and `Pause` stops the callback. A seek in `paused`, `stopped`, `ended`, `idle` or `error` is rejected by the table.
+
+- A negative value returns false with `BadArgument` and the detail "negative seek".
+- On a known length, a target past the end is clamped to the last frame.
+- If the engine refuses the seek, the call returns false with `DecodeFailure` and the detail "seek rejected". The state stays `playing`.
+- The seek is asynchronous, so `PositionMs()` settles a moment after the call. It then lands within one ring buffer of the target: 16384 frames, about 341 ms at 48 kHz. `tests/player_test.salam` seeks to 1 s, waits 50 ms after the engine reports the seek done, and asserts the position is within 341 ms of 1000 ms.
+
+## Queue
+
+The queue is a list of path strings in the order they were added. The path is the identity of a track: there is no track type, and tags and metadata belong to the library, not here. The queue checks nothing when a path is added; a bad path is found out when it is played.
+
+| Call | What it does |
+| --- | --- |
+| `QueueAdd(path)` | Appends a path. |
+| `QueueClear()` | Empties the queue and sets the index to 0. The track that is playing keeps playing. |
+| `QueueLen()`, `QueueIndex()`, `QueueAt(i)` | Read the length, the index of the current entry (0 for an empty queue) and the path at `i` (the empty string when out of range). |
+| `QueueSetIndex(i)` | Makes entry `i` current without playing it. False and no change when `i` is out of range. |
+| `SetRepeat(mode)` / `Repeat()` | `RepeatMode.Off`, `One` or `All`. |
+| `SetShuffle(enabled)` / `Shuffle()` | Turns shuffle on or off. |
+| `SetShuffleSeed(seed)` | Sets the seed the shuffle deals from. Zero selects the default seed. |
+
+- **`Play` does not add to the queue.** If the path equals an entry, that entry becomes current, so `Next` follows from it. Any other path leaves the queue and its index alone.
+- **The queue survives `Stop`.** `Init` and `Reset` do not clear the queue, the repeat mode, the shuffle setting or the seed either; a test or a caller that wants a clean queue calls `QueueClear()`, `SetRepeat(RepeatMode.Off)` and `SetShuffle(false)` itself.
+- **The index moves before the open.** `Next` and `Prev` move the index, then try to open the track. A track that fails to open leaves the state `error`, and the next `Next` or `Prev` moves on from it.
+- **Repeat.** With `Off`, `Next` on the last entry and `Prev` on the first are rejected. With `All`, both wrap around. With `One`, a track that ends by itself plays again; an explicit `Next` or `Prev` still moves.
+- **Shuffle is a deck.** Turning shuffle on deals a permutation of every queue index with the current entry first, and `Next` walks it. At the end of the deck, `All` deals a new deck and `Off` rejects with "end of queue". Adding a path while shuffle is on deals a new deck, so the order of the tracks still to come changes.
+- **The shuffle is deterministic.** The generator is xorshift64\* on the stored seed, so the same seed and the same queue give the same order. `SetShuffleSeed` also deals a new deck when shuffle is on.
+- **`Prev` is linear.** It steps to the previous queue index, also with shuffle on. There is no shuffle history, so `Prev` after a shuffled `Next` does not return to the track that played before.
+
+## End of track
+
+`Tick(nowMs)` is the only call that notices a track ending. The caller runs it regularly from its event loop and passes a monotonic clock reading in milliseconds; production would pass `time.MonoMillis()` and tests pass a number. `Tick` does nothing unless the state is `playing`. In order, it:
+
+1. closes a pending gap measurement, if the next track has played its first frame;
+2. moves to `error` with `DecodeFailure` if the engine counted a decode error since the track started, stopping the device;
+3. advances when the stream has drained.
+
+**The drain condition is `atEnd` and `fillLevel == 0`.** `atEnd` means every decoded frame reached the ring, not that the device has played it, so advancing on `atEnd` alone would cut off the tail. The condition needs no duration, which is why it works for OGG. See [the engine's status interface](/audio-engine#status).
+
+When the stream has drained:
+
+| Queue | Repeat | Result |
+| --- | --- | --- |
+| empty | any | `ended`. The device is stopped and the file stays open. |
+| not empty | `One` | The same path plays again. The queue index does not move. |
+| not empty | `Off`, at the last entry | `ended`. |
+| not empty | `Off`, otherwise | The next entry plays (the next in the deck with shuffle on). |
+| not empty | `All` | The next entry plays, wrapping to the first. |
+
+If the next track fails to open or start, the state is `error` and the last error says why. From `ended`, `Toggle` replays the last track and `Play` plays any path.
+
+`LastGapMs()` returns the time between two tracks that `Tick` advanced by itself, or -1 until one has been measured. `Next` and `Prev` are not measured, and a `Pause` cancels a measurement in progress.
+
+## Errors
+
+A failed command records an error code, the user-facing text for it, and a detail string: the path, the engine's own message, or the reason. They are read with `LastError()`, `LastErrorText()` (or `TextFor(code)`) and `LastErrorDetail()`. A failed `Play`, `Next`, `Prev` or `Resume` leaves the state `error` and no file open.
+
+| Code | Text | Detail |
+| --- | --- | --- |
+| `FileMissing` | file not found | the path, or "not a file" for a directory |
+| `UnsupportedCodec` | unsupported audio format | the path |
+| `DecodeFailure` | could not decode this file | the engine's description, or "seek rejected" |
+| `DeviceLost` | audio device unavailable | the device's own message |
+| `PermissionDenied` | permission denied | the path |
+| `BadArgument` | invalid command argument | the reason: "command not allowed in state ...", "queue is empty", "end of queue", "start of queue", "empty path", "negative seek", "volume must be 0 to 100" |
+| `None` | the empty string | the empty string |
+
+`Play` classifies a failure to open in this order, and the first match wins:
+
+1. an empty path is `BadArgument`;
+2. a path that does not exist is `FileMissing`;
+3. a directory is `FileMissing`, with the detail "not a file";
+4. a file with no permission bits is `PermissionDenied`;
+5. if the engine then fails to open it: an extension other than `.wav`, `.flac`, `.mp3` or `.ogg` is `UnsupportedCodec`, and any other failure is `DecodeFailure` carrying the engine's description;
+6. if the device then fails to start, that is `DeviceLost`. This also covers a decoder found dead while the engine primes the ring, which the engine reports as a failed start.
+
+The codec check is the extension, and only after the engine has refused the file: a file with an unfamiliar extension that the engine can decode still plays.
+
+**Device loss after a successful start is not detected until the next start or stop.** The engine leaves miniaudio's device notification callback unset, so a device that disappears while a track plays surfaces only as underruns in the engine's status, not as an error here. Detection is an engine change; see [the engine API](/audio-engine#the-engine-api).
+
+## Verification
+
+The controller is tested without audio hardware: every test calls `player.Init(true)`, which selects miniaudio's null backend, and passes its own number to `Tick`.
+
+```sh
+make test
+sh tests/run.sh player_test
+sh tests/run.sh queue_test
+```
+
+`make test` runs the whole suite. The single-test form needs a prior `make build`. See [tests](/tests) for what each program covers.
+
+## Invariants
+
+- **No TUI import.** The package includes the engine and the Salam standard library only.
+- **A singleton, because the engine is.** One file is open and one device exists at a time, so the controller keeps its state in package globals and there is one player per process.
+- **One file at a time.** `Next`, `Prev` and an automatic advance close the current file and open the next. Nothing is pre-opened, so the controller cannot crossfade or play gaplessly.
+- **`Tick(nowMs)` is the only clock.** The controller reads no time itself.
