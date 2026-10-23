@@ -130,6 +130,40 @@ If the next track fails to open or start, the state is `error` and the last erro
 
 `LastGapMs()` returns the time between two tracks that `Tick` advanced by itself, or -1 until one has been measured. `Next` and `Prev` are not measured, and a `Pause` cancels a measurement in progress.
 
+## The inter-track gap
+
+`sh tests/gap.sh` measures the gap on the real audio backend. It builds and runs `tests/gap.salam`, which queues `tests/fixtures/tone.wav` and `tests/fixtures/tone.flac`, plays the WAV on the default output device, seeks to 1 s so half a second of the 1.5 s file is left, and calls `Tick` with the real monotonic clock every 5 ms until `LastGapMs()` has a value. It prints the backend miniaudio opened and the gap:
+
+```text
+backend=Core Audio
+gap_ms=N
+```
+
+It needs `make build` first, because it links `build/miniaudio.o` and `build/ma_shim.o`, and it needs the machine's audio output. It is not a test: `make test` and CI do not run it and `tests/run.sh` does not discover it. The unit tests assert the measuring mechanism with a fake clock and no wall-clock number.
+
+**What the number is.** The gap runs from the `Tick` that saw the first track drain to the `Tick` that saw the second track play its first frame. It covers the controller's own restart: closing the first file, opening the second, creating and starting the device, and the device's first callback taking a frame. Both ends are `Tick` times, so each can trail the event it saw by up to one tick period (5 ms in the harness): the end reads high and the start reads low, and the resolution of the number is that period.
+
+**What it is not.**
+
+- It is not silence the controller inserts. It inserts none.
+- It is not a gapless promise. The engine holds one file and one device, so the next file cannot be opened until the current one is closed; the gap is the cost of that, and the controller cannot remove it.
+- It is not a measure of what a listener hears. It is timed on the control thread, and the output device's own latency is not in it.
+- It is not a guarantee for other hardware. It was measured on one host.
+
+**Recorded result.** 12 runs, one at a time, on 2026-10-24.
+
+| Item | Value |
+| --- | --- |
+| Host | `Darwin arm64`, macOS 27.0.1 (build 26A434) |
+| Backend | `Core Audio`, as printed |
+| Tick period | 5 ms |
+| Runs | 12 |
+| Minimum | 74 ms |
+| Median | 94.5 ms |
+| Maximum | 102 ms |
+
+The runs, in order, as `gap_ms`: 81, 83, 99, 102, 89, 90, 102, 74, 96, 99, 94, 95. Each run printed `backend=Core Audio` before its `gap_ms=` line. The spread is real: the number depends on the machine's scheduling and audio stack, so treat it as a range for this host, and re-run the command rather than quote a single value.
+
 ## Errors
 
 A failed command records an error code, the user-facing text for it, and a detail string: the path, the engine's own message, or the reason. They are read with `LastError()`, `LastErrorText()` (or `TextFor(code)`) and `LastErrorDetail()`. A failed `Play`, `Next`, `Prev` or `Resume` leaves the state `error` and no file open.
