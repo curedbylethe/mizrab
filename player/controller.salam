@@ -1,0 +1,117 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The controller's commands: each one consults the transition table first and
+// only then touches the engine, so a rejected command changes nothing but the
+// last error. Position and duration come from the engine's frame counters; the
+// package reads no clock, and time arrives through Tick.
+//
+// The engine is a singleton, so a failed Play leaves no file open: every
+// failure path ends in audio.Close.
+
+package player
+
+import fs.file
+import os
+
+include "../audio/audio.salam"
+
+mut playerCurrent := ""
+mut playerDecodeBase := 0 as i64
+
+// Rejects `command` in the current state: records why and reports false.
+func reject(): bool:
+    setError(ErrorCode.BadArgument, "command not allowed in state " + StateName(playerState))
+    ret false
+end
+
+// Closes the engine and parks the player in `error`; the caller has already
+// recorded the code. Always returns false so a command can `ret fail()`.
+func fail(): bool:
+    audio.Close()
+    playerCurrent = ""
+    playerState = State.Error
+    ret false
+end
+
+// Reports whether `path` has an extension the decoder handles.
+func knownExtension(path: str): bool:
+    ext := file.Extension(path).lower()
+    ret ext == ".wav" or ext == ".flac" or ext == ".mp3" or ext == ".ogg"
+end
+
+// Opens `path` in the engine, or records why not: FileMissing, PermissionDenied,
+// UnsupportedCodec or DecodeFailure. Checks run in that order; the engine is
+// only asked once the file is known to exist, be a file and be readable.
+func openFile(path: str): bool:
+    if path == "":
+        setError(ErrorCode.BadArgument, "empty path")
+        ret false
+    end
+    if os.Exists(path) == false:
+        setError(ErrorCode.FileMissing, path)
+        ret false
+    end
+    if os.IsDir(path):
+        setError(ErrorCode.FileMissing, "not a file")
+        ret false
+    end
+    if file.Stat(path).permissions == 0:
+        setError(ErrorCode.PermissionDenied, path)
+        ret false
+    end
+    if audio.Open(path):
+        ret true
+    end
+    if knownExtension(path) == false:
+        setError(ErrorCode.UnsupportedCodec, path)
+    else:
+        setError(ErrorCode.DecodeFailure, audio.DecoderLastError())
+    end
+    ret false
+end
+
+// Starts the device. A failed start is DeviceLost with the device's own words.
+func startDevice(): bool:
+    if audio.Start(playerNullBackend):
+        ret true
+    end
+    setError(ErrorCode.DeviceLost, audio.DevLastError())
+    ret false
+end
+
+@en "Play"
+/// Opens and starts `path`, replacing whatever was playing. On failure the
+/// state is error, the last error says why and no file stays open.
+pub func Play(path: str): bool:
+    if NextState(playerState, Command.Play).allowed == false:
+        ret reject()
+    end
+    playerState = State.Loading
+    audio.Close()
+    playerCurrent = ""
+    clearError()
+    if openFile(path) == false:
+        ret fail()
+    end
+    if startDevice() == false:
+        ret fail()
+    end
+    playerCurrent = path
+    playerDecodeBase = audio.ReadStatus().decodeErrors
+    audio.SetVolume(playerVolume)
+    playerState = State.Playing
+    ret true
+end

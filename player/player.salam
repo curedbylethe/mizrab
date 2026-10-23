@@ -20,6 +20,7 @@
 //
 //   state.salam   the states, the commands and the transition table
 //   errors.salam  the error codes, their text and the last-error record
+//   controller.salam  the commands, position and duration over the engine
 //
 // Imports nothing above the engine: no basalam, no terminal, no library.
 
@@ -42,9 +43,11 @@ pub func Init(nullBackend: bool):
 end
 
 @en "Reset"
-/// Returns the player to idle and clears the last error. Leaves the volume and
-/// the backend mode alone. Tests call it between cases.
+/// Closes the engine, returns the player to idle and clears the last error.
+/// Leaves the volume and the backend mode alone. Tests call it between cases.
 pub func Reset():
+    audio.Close()
+    playerCurrent = ""
     playerState = State.Idle
     clearError()
 end
