@@ -47,6 +47,11 @@ if [ "$#" -eq 0 ]; then
     done
 fi
 
+# Build from tests/: the compiler checks a `link` path against the declaring
+# file's directory but hands it to the linker unchanged from its cwd, so the
+# two agree only when the cwd is the test directory.
+cd "$ROOT/tests"
+
 pass=0
 fail=0
 for name in "$@"; do
