@@ -29,6 +29,7 @@
       {
         "group": "Findings",
         "pages": [
+          "audio-engine",
           "spike-miniaudio"
         ]
       }

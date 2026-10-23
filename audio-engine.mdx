@@ -1,0 +1,285 @@
+---
+title: "Audio engine"
+description: "How the mizrab audio engine decodes, buffers and plays audio: the decoder matrix, the ring buffer and the verdict on Salam's atomics, the policies, the status interface and the soak record."
+keywords:
+  - "audio"
+  - "engine"
+  - "decoder"
+  - "ring buffer"
+  - "atomics"
+  - "miniaudio"
+  - "soak"
+---
+
+The audio engine is the decode, ring and device layer that turns an audio file into frames for a playback device. It lives in `audio/` as the Salam package `audio` (`audio/audio.salam` is the entry file that merges the others) on top of the vendored miniaudio and stb_vorbis C sources. A decoder thread fills a lock-free ring buffer; miniaudio's audio thread drains it through an exported Salam callback. This page is the engine's record: what it supports, what Salam's atomics can and cannot do, every boundary policy, the status interface and what the soak run did and did not show. It builds on [the miniaudio spike](/spike-miniaudio), whose findings still stand.
+
+The engine is tested headlessly on miniaudio's null backend. No playback command exists yet: `main.salam` still answers only `--version` and `--help`, and nothing in the binary calls the engine.
+
+## Decoder support
+
+The engine decodes four formats through miniaudio's decoders and always produces the same output: interleaved **f32, 2 channels, 48000 Hz**.
+
+| Format | Decoder | Fixture (`tests/fixtures/`) | Source rate and channels |
+| --- | --- | --- | --- |
+| WAV | miniaudio (dr_wav) | `tone.wav` | 8000 Hz, mono |
+| FLAC | miniaudio (dr_flac) | `tone.flac` | 44100 Hz, stereo |
+| MP3 | miniaudio (dr_mp3) | `tone.mp3` | 44100 Hz, stereo |
+| OGG (Vorbis) | miniaudio over stb_vorbis | `tone.ogg` | 22050 Hz, mono |
+
+- **Detection is miniaudio's.** The engine passes no format hint. `ma_decoder_init_file` tries the file-extension match first (`wav`, `flac`, `mp3`, `ogg`) and then tries WAV, FLAC, MP3 and Vorbis in turn, so the engine has no sniffing code of its own.
+- **Conversion happens in the decoder.** The decoder is opened with a config of f32, 2 channels, 48000 Hz, and miniaudio's data converter resamples and remaps channels. A mono or 44.1 kHz source therefore reaches the ring as stereo 48 kHz, and the ring stays fixed-width.
+- **OGG needs stb_vorbis.** miniaudio has no bundled Vorbis decoder: its Vorbis path compiles only when `stb_vorbis.c` was included first. `audio/miniaudio.c` includes the vendored file whole, before `miniaudio.h`, so no other unit may include it. The pin (commit, link and sha256) is in [version pins](/contributing#version-pins).
+- **Everything else stays compiled out.** The build keeps miniaudio's encoders, generators, resource manager, node graph and engine out (`MINIAUDIO_DEFS` in the `Makefile`); the null backend stays compiled in.
+- **Failures are reported, not hidden.** A file that does not open makes `Open` return false and `DecoderLastError` carries miniaudio's description. A read or seek failure while streaming counts one decode error, ends the stream and stops the decoder thread; nothing is logged from the thread.
+
+The fixtures are generated tones, one per format, with provenance and sha256 in `tests/fixtures/README.md`.
+
+## Duration
+
+| Format | Length | Notes |
+| --- | --- | --- |
+| WAV | known | exact |
+| FLAC | known | exact |
+| MP3 | known | miniaudio documents that the length query decodes the whole file; the engine asks once, when the file is opened, and caches the answer |
+| OGG | **reported unknown** | `LengthKnown` is false and `LengthFrames` is 0, on purpose |
+
+Any consumer that derives a position or a duration must carry this matrix: an OGG file has no duration to show, and the engine never fabricates one. It counts the frames it decodes itself, so a position still exists.
+
+**Finding: the Vorbis length is not what the header says.** miniaudio's header says `ma_decoder_get_length_in_pcm_frames` "will always return 0 for Vorbis decoders". With the vendored 0.11.25 and stb_vorbis in push mode, opening a _file_ does return a length, but it is stb_vorbis's estimate and it drifts. On the OGG fixture, decoded at 48 kHz, miniaudio reports 68586 frames and the file decodes to 68267 frames, about 0.47% apart (the program under [upstream findings](#upstream-findings) reproduces both numbers). The shim therefore reports Ogg as unknown rather than pass on a number that does not match the audio.
+
+How it does that is a known shortcut. miniaudio keeps its backend tables file-static, so the format it detected cannot be read back from the decoder. The shim instead sniffs the first four bytes of the file for the `OggS` magic and treats a match as Vorbis. That is correct while Vorbis is the only Ogg codec the build can decode; it must be replaced if another Ogg codec is added.
+
+The other lengths are close but not guaranteed exact for lossy files. On the MP3 fixture the reported length is 66455 frames and the file decodes to 66456. Use the engine's end-of-stream flag, not `position == length`, to detect the end.
+
+## Ring buffer
+
+The ring (`audio/ring.salam`) is a single-producer, single-consumer queue of interleaved stereo f32 frames. The producer is the decoder thread and the consumer is the audio callback.
+
+- **Layout.** The capacity is a power of two, in frames: the engine uses 16384 frames, about 340 ms at 48 kHz. The buffer holds `capacity * 2` floats.
+- **Indices.** Two monotonic 64-bit frame counters, `wr` and `rd`; the slot of frame `n` is `n & mask` and the fill level is `wr - rd`. At 48 kHz an `i64` counter does not wrap in any practical lifetime.
+- **Publish and consume.** `Write` copies frames in and then stores `wr`; `Read` copies frames out and then stores `rd`. Each side only ever stores its own counter, and only loads the other's.
+- **Allocation.** `New` allocates the buffer and the two counter cells once; `Free` releases them after both threads have stopped. `Write`, `Read` and `FillLevel` never allocate, log or lock.
+
+### Are Salam's atomics enough?
+
+**Yes, for single-producer, single-consumer.** `std/atomic` is sufficient because every operation it offers is sequentially consistent, which is stronger than the publish/consume pairing an SPSC ring needs. Correctness is not in question.
+
+What is missing:
+
+- **Weaker orderings.** There is no ordering parameter: no relaxed and no acquire/release. Every load and store pays for `seq_cst` where a weaker ordering would do.
+- **A fence builtin.** There is no standalone memory fence.
+- **Other widths.** The cells are `i64` only (plus a boolean flag type). There is no 32-bit or pointer-width atomic.
+
+Two consequences follow from how `std/atomic` is built:
+
+- **Cells are heap-boxed.** Each cell is a separate allocation. That is why the ring's counters, and the metric counters, are allocated once at construction and never in the callback.
+- **The lock-free claim holds for the LLVM backend only.** Under the tcc C backend every cell operation takes a `sync.Mutex`. mizrab builds with the LLVM backend only, so the shipped engine is lock-free; a tcc build would not be.
+
+## Callback rules
+
+The audio callback is the exported function `mizrab_engine_fill`, a top-level `export:` function as the spike required, because a Salam closure is not a C function pointer. It does nothing but call `FillFrames(out, frames)`, which tests also call directly.
+
+`FillFrames` does exactly four things, in this order:
+
+1. Zero the whole output buffer. The shim sets `noPreSilencedOutputBuffer`, so miniaudio does not zero it first.
+2. `Read` up to `frames` frames from the ring.
+3. Add any shortfall to the underrun counter.
+4. Add the frames actually read to the played counter.
+
+Rules, inherited from the spike and applied here:
+
+- **No allocation, no locking, no logging, no sleeping** in the callback. It calls only `Read`, `mem.Set` and the metric counter functions.
+- **No device lifecycle calls** from inside it: starting or stopping the device from the callback deadlocks (the spike quotes miniaudio on this).
+- **Prime the ring before the device starts.** `ma_device_start` pulls an initial chunk before it returns, and `DecoderStart` fills the ring on the calling thread before it spawns the decoder thread.
+- **Do not assume a fixed `frames` count.** `FillFrames` takes whatever the device asks for.
+
+A search of the generated C for the callback path found none of `malloc`, `calloc`, `realloc`, `pthread_mutex` or `printf`. The one minor point is that the callback does use atomics (the ring's two counters and the metric counters). They never block, but they are all `seq_cst`, as above.
+
+## Policies
+
+Every boundary the engine has a rule for, one line each.
+
+| Policy | What the engine does |
+| --- | --- |
+| Underrun | The callback fills the missing part of the buffer with silence and adds the shortfall, in frames, to the underrun counter. |
+| Overrun | A short `Write` means the ring is full and is a retry signal: the decoder thread adds the refused frames to the overrun counter, sleeps 1 ms and retries the rest. No frame is dropped or overwritten. The counter counts refusals, **not lost audio**, so it climbs steadily in normal play whenever the producer is ahead of the consumer. |
+| Seek | The decoder thread, not the callback, performs it: it stops writing, waits for the consumer to drain the ring, discards its unsent frames, repositions the decoder and refills. The callback never writes an index. The device must be running, or the seek waits. The resampler restarts at the seek: on the WAV fixture the stream resumes about 10 frames from the requested position and ends about 6 frames short, and the decode test bounds the end gap at 16 frames. |
+| Volume | The device's master volume, an integer 0 to 100, clamped, applied through miniaudio so no per-sample gain runs in Salam. `GetVolume` returns -1 without a device. |
+| Mono and stereo | The decoder converts every source to 2 channels, so a mono file arrives as stereo. |
+| Sample rate | The decoder resamples every source to 48000 Hz, and the device is opened at 48000 Hz, so the ring and the device never disagree. |
+| Decode error | One decode error is counted, the stream ends and the decoder thread stops; the consumer then drains silence. |
+| Null backend | `Start(true)` and `Arm(true)` select miniaudio's null backend through the context, so no audio hardware is touched. It is paced by a timer in wall-clock time, not by a device clock. |
+
+## The engine API
+
+The engine is a singleton: the decoder and device keep their state in package globals and the shim in C statics, so exactly one file is open and one device exists at a time. Lifting that is a later refactor, not a hidden failure mode. Hotplug, route changes and device interruptions are not handled: the device notification callback is left unset.
+
+All verbs are for the control thread:
+
+| Verb | What it does |
+| --- | --- |
+| `Open(path)` | Allocates the ring and the metrics and opens the decoder. False if a file is already open, on allocation failure or if the file cannot be decoded; nothing stays allocated on failure. |
+| `Start(null_backend)` | Primes the ring, spawns the decoder thread, creates the device and starts its callback. Leaves nothing running on failure. |
+| `Arm(null_backend)` | Everything `Start` does except starting the callback. For tests, which then drive `FillFrames` by hand. |
+| `Stop()` | Stops the device, then the decoder thread (joined). The file stays open. |
+| `Close()` | Stops everything and frees the device, decoder, ring and metrics. Idempotent. |
+| `Seek(frame)` | Requests a seek to an output frame; poll `DecoderSeekPending`. False if not started or the target is past a known length. |
+| `SetVolume(percent)` / `GetVolume()` | The volume policy above. |
+| `ReadStatus()` | The status snapshot below. |
+| `FillFrames(out, frames)` | The callback body, public so tests can call it. |
+
+Teardown is always consumer first, then producer, and every thread is joined before the ring or the metrics are freed.
+
+### Status
+
+`ReadStatus()` returns a `Status`. It is named `Status` (and the function `ReadStatus`) because the metrics layer already owns the name `Snapshot`. `Status` is the contract for a debug overlay: the overlay calls `ReadStatus()` and renders the fields; the engine contains no rendering code.
+
+| Field | Meaning |
+| --- | --- |
+| `underruns` | Frames the callback had to fill with silence, summed. |
+| `overruns` | Frames the ring refused the decoder thread, summed. Not lost audio; see the overrun policy. |
+| `framesDecoded` | Frames the decoder thread has produced, cumulative. |
+| `framesPlayed` | Frames the callback took from the ring. |
+| `decodeErrors` | Decode errors counted. |
+| `seeks` | Seeks completed. |
+| `fillLevel` | Frames in the ring now. |
+| `fillCapacity` | Ring capacity in frames (16384). |
+| `sampleRate`, `channels` | The configured output, 48000 and 2. |
+| `lengthFrames` | Length in output frames, or 0 when unknown. |
+| `lengthKnown` | False for OGG; see the duration matrix. |
+| `atEnd` | The stream ended or failed and every decoded frame has reached the ring. |
+| `backend` | The backend miniaudio actually opened (`Core Audio`, `ALSA`, `Null`), or `none`. |
+
+Read it from any thread while the engine runs. It is built from atomic loads and plain reads only: it does not allocate, lock or format. Each field is its own load, so the fields are not a consistent cut of one instant. With no file open every field is zero and `backend` is `none`.
+
+**`sampleRate` and `channels` are the configured constants, not a read-back from the device.** The engine asks for 48000 Hz and 2 channels and reports that. If a backend ran at another rate, miniaudio would convert and this struct would not show it, so a rate mismatch is not observable beyond the request.
+
+## Soak
+
+`make soak` pushes one hour of audio frames through the engine. It runs on a **virtual clock**: it arms the engine on the null backend without starting its callback, and the consumer pulls 480-frame chunks through `FillFrames` as fast as the decoder thread supplies them. No wall-clock or device-cadence claim follows from it, so it does not show that an hour of real-time playback is drift-free on a device; a real-time hour is a check the user runs, and CI does not run `make soak`. What it does show is exact frame accounting and flat memory over one hour of frames.
+
+The recorded result, verbatim from the final runs. Host: macOS (Darwin), `make soak`, two final runs. Source: 8 kHz mono 8-bit WAV, 28 800 000 samples, sha256 `61d97cd8754359385b24dafa4a07452567af4bd04028a2e57c07e61542c3f17c`. Virtual clock: the consumer pulls 480-frame chunks via `FillFrames` as fast as the decoder thread supplies them. No wall-clock or device-cadence claim follows from this.
+
+`fill=` and `decoded=` vary between runs (decoder thread timing); `frames`, `capacity`, `underruns` and the summary are stable. Wall time 18-19 s per run. RSS bound = 2 x 1568 KB (the first measured steady value) = 3136 KB. RSS sampled once per second by the shell with `ps -o rss=`; the first sample (32 KB) is the shell before exec and is not the baseline. macOS RSS drifts down at the start of a run, so steady (1440 and 1536 in the two runs) is below baseline (2208).
+
+Run 1:
+
+```text
+wav: <repo>/build/soak/soak-60min-8k-mono-u8.wav
+wav_size_bytes=28800044 sha256=61d97cd8754359385b24dafa4a07452567af4bd04028a2e57c07e61542c3f17c
+budget_frames=172800000 (3600 s x 48000 Hz; source 8000 Hz mono 8-bit, 28800000 samples)
+-- program output
+soak: path=<repo>/build/soak/soak-60min-8k-mono-u8.wav expected_frames=172800000 chunk=480
+frames=28800000 capacity=16384 fill=4864 decoded=28805120 underruns=0
+frames=57600000 capacity=16384 fill=14944 decoded=57615360 underruns=0
+frames=86400000 capacity=16384 fill=1024 decoded=86402048 underruns=0
+frames=115200000 capacity=16384 fill=4864 decoded=115205120 underruns=0
+frames=144000000 capacity=16384 fill=544 decoded=144001024 underruns=0
+frames=172800000 capacity=16384 fill=0 decoded=172800000 underruns=0
+frames=172800000 capacity=16384 fill=0 decoded=172800000 underruns=0
+summary: frames_played=172800000 frames_decoded=172800000 underruns=0 decode_errors=0
+soak: PASS
+-- rss series
+rss_series_kb=32 2208 1440 1440 1536 1440 1552 1552 1440 1536 1536 1536 1536 1536 1536 1536 1536 1536
+rss_samples=18
+rss_kb baseline=2208 steady=1536 max=2208 bound=3136
+wall_time_s=19
+soak: PASS (frames exact, rss within bound)
+```
+
+Run 2:
+
+```text
+wav: <repo>/build/soak/soak-60min-8k-mono-u8.wav
+wav_size_bytes=28800044 sha256=61d97cd8754359385b24dafa4a07452567af4bd04028a2e57c07e61542c3f17c
+budget_frames=172800000 (3600 s x 48000 Hz; source 8000 Hz mono 8-bit, 28800000 samples)
+-- program output
+soak: path=<repo>/build/soak/soak-60min-8k-mono-u8.wav expected_frames=172800000 chunk=480
+frames=28800000 capacity=16384 fill=544 decoded=28801024 underruns=0
+frames=57600000 capacity=16384 fill=13984 decoded=57614336 underruns=0
+frames=86400000 capacity=16384 fill=10144 decoded=86410240 underruns=0
+frames=115200000 capacity=16384 fill=8192 decoded=115208192 underruns=0
+frames=144000000 capacity=16384 fill=11104 decoded=144011264 underruns=0
+frames=172800000 capacity=16384 fill=0 decoded=172800000 underruns=0
+frames=172800000 capacity=16384 fill=0 decoded=172800000 underruns=0
+summary: frames_played=172800000 frames_decoded=172800000 underruns=0 decode_errors=0
+soak: PASS
+-- rss series
+rss_series_kb=32 2208 2208 1536 1536 1536 1536 1536 1440 1568 1440 1440 1536 1440 1440 1536 1440
+rss_samples=17
+rss_kb baseline=2208 steady=1440 max=2208 bound=3136
+wall_time_s=18
+soak: PASS (frames exact, rss within bound)
+```
+
+## Upstream findings
+
+Two limitations were found. Neither has been filed upstream yet; each is written in the four fields of the [upstream findings](/contributing#upstream-findings) convention for the findings log to copy. Both share the first two fields.
+
+**1. Salam version.**
+
+```text
+salam 0.5.6
+commit:  a9ed30003c50c17b69eeab036a427b8713376a7a
+date:    2026-10-19T09:49:22+02:00
+built:   Oct 19 2026 08:15:01 UTC
+origin:  official release build (v0.5.6)
+os:      mac
+arch:    arm64
+```
+
+**2. OS and terminal.** macOS 27.0.1, arm64, Apple clang 17.0.0. The terminal was not recorded.
+
+### miniaudio: Vorbis length contradicts its documentation
+
+This is a defect in vendored miniaudio 0.11.25, to be filed at [miniaudio issues](https://github.com/mackron/miniaudio/issues) rather than the Salam tracker.
+
+**3. Minimal reproduction.** From the repository root, with the OGG fixture:
+
+```c
+#include "stb_vorbis.c"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#include <stdio.h>
+int main(int argc, char** argv) {
+    ma_decoder d; ma_uint64 len = 0, total = 0, got;
+    static float buf[4096 * 2];
+    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
+    if (ma_decoder_init_file(argv[1], &cfg, &d) != MA_SUCCESS) return 1;
+    ma_decoder_get_length_in_pcm_frames(&d, &len);
+    printf("length=%llu\n", (unsigned long long)len);
+    do { got = 0; ma_decoder_read_pcm_frames(&d, buf, 4096, &got); total += got; } while (got == 4096);
+    printf("decoded=%llu\n", (unsigned long long)total);
+    return 0;
+}
+```
+
+```sh
+cc -Iaudio -DMA_NO_ENCODING -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER \
+  -DMA_NO_NODE_GRAPH -DMA_NO_ENGINE -DMA_NO_DEVICE_IO -o vlen vlen.c
+./vlen tests/fixtures/tone.ogg
+```
+
+**4. Expected vs actual.** Expected, per the header comment: `ma_decoder_get_length_in_pcm_frames` "will always return 0 for Vorbis decoders" because of "a limitation with stb_vorbis in push mode". Actual: it returns `MA_SUCCESS` with `length=68586`, while reading the file to the end yields `decoded=68267`. The number is stb_vorbis's estimate, not the real length, and about 0.5% off. Workaround used: the shim reports Ogg as length-unknown by sniffing the `OggS` magic.
+
+### Salam `std/atomic`: no ordering control
+
+**3. Minimal reproduction.** The whole public surface of the package:
+
+```sh
+grep -n '^pub' ~/.salam/bin/std/atomic/atomic.salam
+```
+
+**4. Expected vs actual.** Expected, for a lock-free ring: operations that take a memory ordering, a fence, and cells narrower than 64 bits or pointer-sized. Actual: `I64` with `NewI64`, `Load`, `Store`, `Add`, `Swap` and `CompareAndSwap`, plus a `Flag`; every operation is `seq_cst`; each cell is heap-boxed. Under the tcc C backend each operation takes a `sync.Mutex`. Not a defect: the ring is correct on this surface. Workaround used: two `i64` cells, allocated once at construction.
+
+## Not verified
+
+This work does not widen what [the spike](/spike-miniaudio#what-was-not-verified) left unverified, and adds a few limits of its own:
+
+- **No audible Linux result.** The engine test is silent by construction, on the null backend, and no Linux host produced sound.
+- **No Windows build.** The shim is POSIX-only.
+- **No hotplug.** A device change while playing is unhandled and untested.
+- **No multi-engine.** Exactly one file and one device at a time.
+- **No real-device soak.** The soak is a virtual-clock frame-count and memory result on one macOS host. No hour of real-time playback was run, on any backend or device.
+- **CI legs not observed by this work.** The engine test runs inside `make test` on the Ubuntu and macOS legs of CI, but this work ran only on macOS; neither leg's result is claimed here.
+- **No playback command.** The binary does not call the engine yet.
