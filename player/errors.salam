@@ -1,0 +1,78 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The player's error taxonomy: a code for each way a command can fail and the
+// text a person reads. The engine returns bool plus a string; the controller
+// classifies that into one of these codes and keeps the engine string as the
+// detail. The last error lives in the package globals declared in player.salam.
+
+package player
+
+@en "ErrorCode"
+/// Why the last command failed. None means the last command did not fail.
+pub enum ErrorCode:
+    None
+    FileMissing
+    UnsupportedCodec
+    DecodeFailure
+    DeviceLost
+    PermissionDenied
+    BadArgument
+end
+
+// Records a failure; the controller calls this before it returns false.
+func setError(code: ErrorCode, detail: str):
+    playerError = code
+    playerDetail = detail
+end
+
+// Forgets the last failure.
+func clearError():
+    playerError = ErrorCode.None
+    playerDetail = ""
+end
+
+@en "TextFor"
+/// The user-facing text for `code`. None is the empty string.
+pub func TextFor(code: ErrorCode): str:
+    ret match code:
+        None: "" end
+        FileMissing: "file not found" end
+        UnsupportedCodec: "unsupported audio format" end
+        DecodeFailure: "could not decode this file" end
+        DeviceLost: "audio device unavailable" end
+        PermissionDenied: "permission denied" end
+        BadArgument: "invalid command argument" end
+    end
+end
+
+@en "LastError"
+/// The code of the last failure, or None.
+pub func LastError(): ErrorCode:
+    ret playerError
+end
+
+@en "LastErrorText"
+/// The user-facing text of the last failure, or the empty string.
+pub func LastErrorText(): str:
+    ret TextFor(playerError)
+end
+
+@en "LastErrorDetail"
+/// The path or engine string that came with the last failure, or the empty
+/// string.
+pub func LastErrorDetail(): str:
+    ret playerDetail
+end

@@ -1,0 +1,206 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The playback state machine as data: seven states, nine commands and one pure
+// function that says what each command does in each state. Nothing here calls
+// the engine or mutates anything; the controller consults NextState, then acts.
+//
+// Rows are states, columns are commands. "Allowed" carries the state the
+// command leads to; a rejected command leaves the state unchanged.
+//
+//   state    play     toggle   pause   resume   stop     seek     next     prev     volume
+//   idle     loading  -        -       -        -        -        -        -        idle
+//   loading  -        -        -       -        -        -        -        -        -
+//   playing  loading  paused   paused  -        stopped  playing  loading  loading  playing
+//   paused   loading  playing  -       playing  stopped  -        loading  loading  paused
+//   stopped  loading  -        -       -        -        -        loading  loading  stopped
+//   ended    loading  loading  -       -        stopped  -        loading  loading  ended
+//   error    loading  -        -       -        stopped  -        loading  loading  error
+//
+// loading is transient: Open is synchronous, so a play enters it and leaves it
+// inside the same call, and it accepts no command of its own.
+
+package player
+
+@en "State"
+/// Where playback is. Loading is transient and never seen between calls.
+pub enum State:
+    Idle
+    Loading
+    Playing
+    Paused
+    Stopped
+    Ended
+    Error
+end
+
+@en "Command"
+/// Everything a caller can ask the player to do.
+pub enum Command:
+    Play
+    Toggle
+    Pause
+    Resume
+    Stop
+    Seek
+    Next
+    Prev
+    Volume
+end
+
+@en "Transition"
+/// The answer to "may this command run here": whether it is allowed and the
+/// state it leads to (the current state when it is not).
+pub struct Transition:
+    pub allowed: bool = false
+    pub to: State = State.Idle
+end
+
+func yes(dest: State): Transition:
+    ret Transition { allowed = true, to = dest }
+end
+
+func no(here: State): Transition:
+    ret Transition { allowed = false, to = here }
+end
+
+func fromIdle(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: no(State.Idle) end
+        Pause: no(State.Idle) end
+        Resume: no(State.Idle) end
+        Stop: no(State.Idle) end
+        Seek: no(State.Idle) end
+        Next: no(State.Idle) end
+        Prev: no(State.Idle) end
+        Volume: yes(State.Idle) end
+    end
+end
+
+func fromPlaying(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: yes(State.Paused) end
+        Pause: yes(State.Paused) end
+        Resume: no(State.Playing) end
+        Stop: yes(State.Stopped) end
+        Seek: yes(State.Playing) end
+        Next: yes(State.Loading) end
+        Prev: yes(State.Loading) end
+        Volume: yes(State.Playing) end
+    end
+end
+
+func fromPaused(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: yes(State.Playing) end
+        Pause: no(State.Paused) end
+        Resume: yes(State.Playing) end
+        Stop: yes(State.Stopped) end
+        Seek: no(State.Paused) end
+        Next: yes(State.Loading) end
+        Prev: yes(State.Loading) end
+        Volume: yes(State.Paused) end
+    end
+end
+
+func fromStopped(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: no(State.Stopped) end
+        Pause: no(State.Stopped) end
+        Resume: no(State.Stopped) end
+        Stop: no(State.Stopped) end
+        Seek: no(State.Stopped) end
+        Next: yes(State.Loading) end
+        Prev: yes(State.Loading) end
+        Volume: yes(State.Stopped) end
+    end
+end
+
+func fromEnded(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: yes(State.Loading) end
+        Pause: no(State.Ended) end
+        Resume: no(State.Ended) end
+        Stop: yes(State.Stopped) end
+        Seek: no(State.Ended) end
+        Next: yes(State.Loading) end
+        Prev: yes(State.Loading) end
+        Volume: yes(State.Ended) end
+    end
+end
+
+func fromError(c: Command): Transition:
+    ret match c:
+        Play: yes(State.Loading) end
+        Toggle: no(State.Error) end
+        Pause: no(State.Error) end
+        Resume: no(State.Error) end
+        Stop: yes(State.Stopped) end
+        Seek: no(State.Error) end
+        Next: yes(State.Loading) end
+        Prev: yes(State.Loading) end
+        Volume: yes(State.Error) end
+    end
+end
+
+@en "NextState"
+/// What `command` does in `state`, per the table above. Pure: it reads nothing
+/// and changes nothing.
+pub func NextState(state: State, command: Command): Transition:
+    ret match state:
+        Idle: fromIdle(command) end
+        Loading: no(State.Loading) end
+        Playing: fromPlaying(command) end
+        Paused: fromPaused(command) end
+        Stopped: fromStopped(command) end
+        Ended: fromEnded(command) end
+        Error: fromError(command) end
+    end
+end
+
+@en "StateName"
+/// The lower-case name of `state`, as shown to people.
+pub func StateName(state: State): str:
+    ret match state:
+        Idle: "idle" end
+        Loading: "loading" end
+        Playing: "playing" end
+        Paused: "paused" end
+        Stopped: "stopped" end
+        Ended: "ended" end
+        Error: "error" end
+    end
+end
+
+@en "CommandName"
+/// The lower-case name of `command`, as shown to people.
+pub func CommandName(command: Command): str:
+    ret match command:
+        Play: "play" end
+        Toggle: "toggle" end
+        Pause: "pause" end
+        Resume: "resume" end
+        Stop: "stop" end
+        Seek: "seek" end
+        Next: "next" end
+        Prev: "prev" end
+        Volume: "volume" end
+    end
+end
