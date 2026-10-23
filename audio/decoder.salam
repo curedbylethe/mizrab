@@ -1,0 +1,333 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Streaming decoder: miniaudio decodes a file on its own thread into the ring.
+//
+// Format: DecoderOpen lets miniaudio detect the container (no sniffing here)
+// and asks it for f32 / 2 ch / 48000 Hz, so mono and any source rate arrive
+// as stereo 48 kHz and the ring stays fixed-width.
+//
+// Ownership: the decoder is not thread-safe. Before DecoderStart and after
+// DecoderStop the control thread owns it; between them only the decoder
+// thread touches it. The control thread talks to the thread through atomic
+// cells only: a stop flag and a seek request.
+//
+// Overrun (producer side): a short Write means the ring is full. The
+// shortfall is added to the overrun counter, the thread sleeps 1 ms and
+// retries the unsent remainder. No frame is dropped or overwritten. Sleeping
+// is legal here and forbidden in the audio callback. Because the ring is
+// full whenever the producer runs ahead, the counter grows steadily while
+// the consumer keeps up: it counts refusals, not lost audio.
+//
+// Seek: DecoderSeek publishes a target and returns. At the top of its loop the
+// thread sees the request, stops writing, waits until FillLevel() == 0 (the
+// consumer drains the stale audio meanwhile), discards its unsent frames,
+// seeks the decoder, counts the seek and resumes filling. The ring indices
+// are monotonic, so an empty ring needs no Reset and the consumer is never
+// raced by an index write. The consumer's own Read keeps returning 0 while the
+// ring is empty. DecoderSeekPending is true until the seek has completed.
+//
+// Errors: DecoderOpen returns false and DecoderLastError holds miniaudio's
+// description. A read or seek failure counts one decode error, stores the
+// description, ends the stream (DecoderAtEnd turns true so the consumer
+// drains silence) and stops the thread. Nothing is logged from the thread.
+//
+// Lifecycle: DecoderStart allocates, primes the ring on the calling thread
+// and only then spawns, so the ring holds audio before any device starts.
+// DecoderStop sets the stop flag, joins and only then frees; nothing is
+// allocated between spawn and join. Frames the thread had decoded but not yet
+// written when it stopped are discarded: DecoderSeek after a restart if the
+// position matters.
+//
+// FramesDecoded is a stream position: frames produced by the decoder since
+// the last seek target (0 at open). Ogg Vorbis has no known length (see
+// ma_shim.c), so DecoderLengthKnown is false there and the engine counts
+// frames itself.
+//
+// Every package-level name here starts with dec/Decoder so the file can sit
+// beside the other files of package audio.
+
+package audio
+
+import atomic
+import mem
+import sync
+import thread
+
+// mizrab_ma_last_error is declared in device.salam; a second extern of the same
+// name is a redefinition error in the merged package.
+extern:
+    func mizrab_ma_decoder_create(path: str, rate: u32, channels: u32): int
+    func mizrab_ma_decoder_read(out: void*, frames: u64, frames_read: void*): int
+    func mizrab_ma_decoder_seek(frame: u64): int
+    func mizrab_ma_decoder_length_frames(): u64
+    func mizrab_ma_decoder_length_known(): int
+    func mizrab_ma_decoder_destroy()
+end
+
+// Frames decoded per read; also the scratch buffer size.
+decChunk := 1024 as i64
+
+mut decRing := Ring {}
+mut decMetrics := Metrics {}
+mut decScratch := null as f32*
+mut decCell := null as u64*
+mut decThread := thread.Thread {}
+mut decOpened := false
+mut decStarted := false
+mut decLength := 0 as i64
+mut decLengthKnown := false
+mut decErr := ""
+
+// Written by the decoder thread only (and by DecoderStart before the spawn).
+mut decPending := 0 as i64
+mut decEof := false
+
+// Control thread <-> decoder thread.
+mut decStop := atomic.I64 {}
+mut decSeekReq := atomic.I64 {}
+mut decSeekBusy := atomic.I64 {}
+mut decSeekTarget := atomic.I64 {}
+mut decAtEnd := atomic.I64 {}
+mut decDead := atomic.I64 {}
+mut decPos := atomic.I64 {}
+
+// Counts one decode error and ends the stream; the thread loop then exits.
+func decFail():
+    AddDecodeError(decMetrics)
+    decErr = mizrab_ma_last_error()
+    atomic.Store(decDead, 1)
+    atomic.Store(decAtEnd, 1)
+end
+
+// Moves the unsent tail (frames [from, decPending)) of the scratch buffer to
+// the front; Salam has no pointer arithmetic to Write from an offset.
+func decShift(from: i64):
+    mut i := 0 as i64
+    until i < (decPending - from) * 2:
+        decScratch[i] = decScratch[from * 2 + i]
+        i = i + 1
+    end
+end
+
+// One unit of producer work: decode a chunk if nothing is waiting, then write
+// what fits. Returns true when frames reached the ring.
+func decStep(): bool:
+    if decPending == 0:
+        if decEof:
+            ret false
+        end
+        if mizrab_ma_decoder_read(decScratch as void*, decChunk as u64, decCell as void*) != 0:
+            decFail()
+            ret false
+        end
+        got := decCell[0] as i64
+        if got < decChunk:
+            decEof = true
+        end
+        decPending = got
+        AddDecoded(decMetrics, got)
+        atomic.Add(decPos, got)
+    end
+    n := Write(decRing, decScratch, decPending)
+    if n < decPending:
+        AddOverrun(decMetrics, decPending - n)
+        if n > 0:
+            decShift(n)
+        end
+    end
+    decPending = decPending - n
+    if decPending == 0 and decEof:
+        atomic.Store(decAtEnd, 1)
+    end
+    ret n > 0
+end
+
+// Runs a requested seek: drain wait, then decoder seek.
+func decDoSeek():
+    atomic.Store(decSeekBusy, 1)
+    atomic.Store(decSeekReq, 0)
+    until FillLevel(decRing) != 0 and atomic.Load(decStop) == 0:
+        sync.SleepMs(1)
+    end
+    if atomic.Load(decStop) == 0:
+        target := atomic.Load(decSeekTarget)
+        decPending = 0
+        decEof = false
+        if mizrab_ma_decoder_seek(target as u64) != 0:
+            decFail()
+        else:
+            atomic.Store(decPos, target)
+            AddSeek(decMetrics)
+            atomic.Store(decAtEnd, 0)
+        end
+    end
+    atomic.Store(decSeekBusy, 0)
+end
+
+func decWorker(_arg: void*):
+    until atomic.Load(decStop) == 0 and atomic.Load(decDead) == 0:
+        if atomic.Load(decSeekReq) != 0:
+            decDoSeek()
+        else:
+            if decStep() == false:
+                sync.SleepMs(1)
+            end
+        end
+    end
+end
+
+@en "DecoderOpen"
+/// Opens `path`, letting miniaudio detect the format, as f32 / 2 ch / 48000 Hz.
+/// Returns false on failure and DecoderLastError says why. One decoder at a
+/// time.
+pub func DecoderOpen(path: str): bool:
+    decErr = ""
+    if decOpened:
+        decErr = "decoder already open"
+        ret false
+    end
+    if mizrab_ma_decoder_create(path, 48000 as u32, 2 as u32) != 0:
+        decErr = mizrab_ma_last_error()
+        ret false
+    end
+    decLengthKnown = mizrab_ma_decoder_length_known() != 0
+    decLength = mizrab_ma_decoder_length_frames() as i64
+    decStop = atomic.NewI64(0)
+    decSeekReq = atomic.NewI64(0)
+    decSeekBusy = atomic.NewI64(0)
+    decSeekTarget = atomic.NewI64(0)
+    decAtEnd = atomic.NewI64(0)
+    decDead = atomic.NewI64(0)
+    decPos = atomic.NewI64(0)
+    decPending = 0
+    decEof = false
+    decOpened = true
+    ret true
+end
+
+@en "DecoderStart"
+/// Primes `r` with decoded audio, then starts the decoder thread. Call it
+/// before any consumer starts. Returns false if nothing is open, the decoder
+/// is already running or `r` is not Valid.
+pub func DecoderStart(r: Ring, m: Metrics): bool:
+    if decOpened == false or decStarted or Valid(r) == false:
+        ret false
+    end
+    decScratch = mem.AllocateZeroed((decChunk * 2 * 4) as u64) as f32*
+    decCell = mem.AllocateZeroed(8 as u64) as u64*
+    if decScratch == null or decCell == null:
+        mem.Free(decScratch as void*)
+        mem.Free(decCell as void*)
+        ret false
+    end
+    decRing = r
+    decMetrics = m
+    atomic.Store(decStop, 0)
+    decPending = 0
+    mut primed := true
+    until primed:
+        primed = decStep()
+    end
+    decThread = thread.New(spawn(decWorker, null))
+    decStarted = true
+    ret true
+end
+
+@en "DecoderStop"
+/// Stops the decoder thread and joins it. The decoder stays open at its
+/// position; unsent frames are discarded.
+pub func DecoderStop():
+    if decStarted:
+        atomic.Store(decStop, 1)
+        thread.Join(decThread)
+        mem.Free(decScratch as void*)
+        mem.Free(decCell as void*)
+        decScratch = null
+        decCell = null
+        decStarted = false
+    end
+end
+
+@en "DecoderClose"
+/// Stops the thread if needed and releases the decoder.
+pub func DecoderClose():
+    DecoderStop()
+    if decOpened:
+        mizrab_ma_decoder_destroy()
+        atomic.DestroyI64(decStop)
+        atomic.DestroyI64(decSeekReq)
+        atomic.DestroyI64(decSeekBusy)
+        atomic.DestroyI64(decSeekTarget)
+        atomic.DestroyI64(decAtEnd)
+        atomic.DestroyI64(decDead)
+        atomic.DestroyI64(decPos)
+        decOpened = false
+    end
+end
+
+@en "DecoderSeek"
+/// Requests a seek to output frame `frame` and returns at once; poll
+/// DecoderSeekPending. The thread waits for the consumer to drain the ring
+/// first. Returns false if the decoder is not running, has failed or `frame`
+/// lies past a known length.
+pub func DecoderSeek(frame: i64): bool:
+    if decStarted == false or atomic.Load(decDead) != 0 or frame < 0:
+        ret false
+    end
+    if decLengthKnown and frame > decLength:
+        ret false
+    end
+    atomic.Store(decSeekTarget, frame)
+    atomic.Store(decSeekReq, 1)
+    ret true
+end
+
+@en "DecoderSeekPending"
+/// Reports whether a requested seek has not finished yet.
+pub func DecoderSeekPending(): bool:
+    ret atomic.Load(decSeekReq) != 0 or atomic.Load(decSeekBusy) != 0
+end
+
+@en "DecoderFramesDecoded"
+/// The decoder's stream position in frames: decoded since the last seek target.
+pub func DecoderFramesDecoded(): i64:
+    ret atomic.Load(decPos)
+end
+
+@en "DecoderLengthFrames"
+/// The stream length in output frames, or 0 when unknown.
+pub func DecoderLengthFrames(): i64:
+    ret decLength
+end
+
+@en "DecoderLengthKnown"
+/// Reports whether DecoderLengthFrames is a real length (false for Ogg Vorbis).
+pub func DecoderLengthKnown(): bool:
+    ret decLengthKnown
+end
+
+@en "DecoderAtEnd"
+/// Reports whether the stream ended or failed and every decoded frame has
+/// reached the ring.
+pub func DecoderAtEnd(): bool:
+    ret atomic.Load(decAtEnd) != 0
+end
+
+@en "DecoderLastError"
+/// The description of the last open, read or seek failure; empty if none.
+pub func DecoderLastError(): str:
+    ret decErr
+end
