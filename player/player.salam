@@ -43,12 +43,16 @@ pub func Init(nullBackend: bool):
 end
 
 @en "Reset"
-/// Closes the engine, returns the player to idle and clears the last error.
+/// Closes the engine, returns the player to idle and clears the last error and
+/// the measured gap.
 /// Leaves the volume and the backend mode alone. Tests call it between cases.
 pub func Reset():
     audio.Close()
     playerCurrent = ""
     playerState = State.Idle
+    playerGapStart = -1
+    playerLastGap = -1
+    playerGapPending = false
     clearError()
 end
 
