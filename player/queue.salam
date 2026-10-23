@@ -1,0 +1,251 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The play queue: the paths in the order they were added, the one being played,
+// the repeat mode and a seeded shuffle. The queue holds paths exactly as given
+// and checks nothing; the controller finds out when it plays one. It lives in
+// package globals because a Vector cannot be a struct field.
+//
+// Shuffle is a deck: a permutation of every queue index that Next walks.
+// Rebuilding it needs a random number, and the generator is xorshift64* on a
+// stored seed, so the same seed always gives the same order and a test can pin it.
+
+package player
+
+import collections
+
+const queueSeedDefault := 88172645463325252 as i64
+
+mut queuePaths := collections.Vector {} as collections.Vector<str>
+mut queueIndex := 0
+mut queueRepeat := RepeatMode.Off
+mut queueShuffle := false
+mut queueDeck := collections.Vector {} as collections.Vector<int>
+mut queueDeckPos := 0
+
+mut queueSeed := queueSeedDefault
+
+@en "RepeatMode"
+/// What happens at the end of a track. Off stops after the last queue entry,
+/// One replays the same track and All wraps the queue around.
+pub enum RepeatMode:
+    Off
+    One
+    All
+end
+
+// One xorshift64* step on the seed. The top bit is dropped so the result is
+// never negative and can be used with `%`. The generator works on u64 because
+// its shifts must be logical; the multiply wraps.
+func nextRand(): i64:
+    mut x := queueSeed as u64
+    x = x ^ (x >> 12 as u64)
+    x = x ^ (x << 25 as u64)
+    x = x ^ (x >> 27 as u64)
+    queueSeed = x as i64
+    ret ((x * 0x2545F4914F6CDD1D as u64) >> 1 as u64) as i64
+end
+
+// Where queue index `i` sits in the deck, or -1.
+func deckFind(i: int): int:
+    mut p := 0
+    until p < queueDeck.len():
+        if queueDeck.get(p) == i:
+            ret p
+        end
+        p = p + 1
+    end
+    ret -1
+end
+
+func deckSwap(a: int, b: int):
+    t := queueDeck.get(a)
+    queueDeck.set(a, queueDeck.get(b))
+    queueDeck.set(b, t)
+end
+
+// Makes a new deck: every queue index once, shuffled (Fisher-Yates). With
+// `currentFirst` the entry being played leads, so Next walks the rest.
+func rebuildDeck(currentFirst: bool):
+    n := queuePaths.len()
+    queueDeck.clear()
+    queueDeckPos = 0
+    mut i := 0
+    until i < n:
+        queueDeck.push(i)
+        i = i + 1
+    end
+    i = n - 1
+    until i > 0:
+        deckSwap(i, (nextRand() % (i + 1) as i64) as int)
+        i = i - 1
+    end
+    if currentFirst and n > 0:
+        deckSwap(0, deckFind(queueIndex))
+    end
+end
+
+// Points the queue at entry `i`, which must exist.
+func queueMoveTo(i: int):
+    queueIndex = i
+    if queueShuffle:
+        queueDeckPos = deckFind(i)
+    end
+end
+
+// Points the queue at `path` when it is queued; an ad-hoc path leaves it alone.
+func queueFollow(path: str):
+    n := queuePaths.len()
+    if n == 0 or queuePaths.get(queueIndex) == path:
+        ret
+    end
+    mut i := 0
+    until i < n:
+        if queuePaths.get(i) == path:
+            queueMoveTo(i)
+            ret
+        end
+        i = i + 1
+    end
+end
+
+// Steps to the next entry (or the previous one) and returns its index, or -1
+// when there is none. Next follows the deck when shuffle is on; Prev is always
+// linear. Repeat All wraps either way. Only the index and the deck position
+// move.
+func queueAdvance(forward: bool): int:
+    n := queuePaths.len()
+    if forward and queueShuffle:
+        mut pos := queueDeckPos + 1
+        if pos >= n:
+            if queueRepeat != RepeatMode.All:
+                ret -1
+            end
+            rebuildDeck(false)
+            pos = 0
+        end
+        queueDeckPos = pos
+        queueIndex = queueDeck.get(pos)
+        ret queueIndex
+    end
+    mut i := queueIndex - 1
+    if forward:
+        i = queueIndex + 1
+    end
+    if i < 0 or i >= n:
+        if queueRepeat != RepeatMode.All:
+            ret -1
+        end
+        i = n - 1
+        if forward:
+            i = 0
+        end
+    end
+    queueMoveTo(i)
+    ret i
+end
+
+@en "QueueAdd"
+/// Appends `path` to the queue. Nothing is checked until it is played. With
+/// shuffle on the deck is rebuilt, so the order of the tracks to come changes.
+pub func QueueAdd(path: str):
+    queuePaths.push(path)
+    if queueShuffle:
+        rebuildDeck(true)
+    end
+end
+
+@en "QueueClear"
+/// Empties the queue and puts the index back at 0. The track that is playing
+/// keeps playing.
+pub func QueueClear():
+    queuePaths.clear()
+    queueDeck.clear()
+    queueIndex = 0
+    queueDeckPos = 0
+end
+
+@en "QueueLen"
+/// How many paths are queued.
+pub func QueueLen(): int:
+    ret queuePaths.len()
+end
+
+@en "QueueIndex"
+/// The index of the queue entry being played (0 for an empty queue).
+pub func QueueIndex(): int:
+    ret queueIndex
+end
+
+@en "QueueAt"
+/// The path at index `i`, or the empty string when `i` is out of range.
+pub func QueueAt(i: int): str:
+    if i < 0 or i >= queuePaths.len():
+        ret ""
+    end
+    ret queuePaths.get(i)
+end
+
+@en "QueueSetIndex"
+/// Makes entry `i` the current one without playing it. False, and no change,
+/// when `i` is negative or past the end.
+pub func QueueSetIndex(i: int): bool:
+    if i < 0 or i >= queuePaths.len():
+        ret false
+    end
+    queueMoveTo(i)
+    ret true
+end
+
+@en "SetRepeat"
+/// Sets what happens at the end of a track.
+pub func SetRepeat(mode: RepeatMode):
+    queueRepeat = mode
+end
+
+@en "Repeat"
+/// The repeat mode.
+pub func Repeat(): RepeatMode:
+    ret queueRepeat
+end
+
+@en "SetShuffle"
+/// Turns shuffle on or off. Turning it on deals a new deck with the current
+/// entry first.
+pub func SetShuffle(enabled: bool):
+    queueShuffle = enabled
+    if enabled:
+        rebuildDeck(true)
+    end
+end
+
+@en "Shuffle"
+/// Whether shuffle is on.
+pub func Shuffle(): bool:
+    ret queueShuffle
+end
+
+@en "SetShuffleSeed"
+/// Sets the seed the shuffle deals from, so a given seed always gives the same
+/// order. Zero would freeze the generator, so it selects the default seed.
+pub func SetShuffleSeed(seed: i64):
+    queueSeed = seed
+    if seed == 0:
+        queueSeed = queueSeedDefault
+    end
+    if queueShuffle:
+        rebuildDeck(true)
+    end
+end
