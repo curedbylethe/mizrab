@@ -111,7 +111,7 @@ The queue is a list of path strings in the order they were added. The path is th
 `Tick(nowMs)` is the only call that notices a track ending. The caller runs it regularly from its event loop and passes a monotonic clock reading in milliseconds; production would pass `time.MonoMillis()` and tests pass a number. `Tick` does nothing unless the state is `playing`. In order, it:
 
 1. closes a pending gap measurement, if the next track has played its first frame;
-2. moves to `error` with `DecodeFailure` if the engine counted a decode error since the track started, stopping the device;
+2. moves to `error` with `DecodeFailure` if the engine counted a decode error since the track started, stopping the device and closing the file;
 3. advances when the stream has drained.
 
 **The drain condition is `atEnd` and `fillLevel == 0`.** `atEnd` means every decoded frame reached the ring, not that the device has played it, so advancing on `atEnd` alone would cut off the tail. The condition needs no duration, which is why it works for OGG. See [the engine's status interface](/audio-engine#status).
@@ -166,7 +166,7 @@ The runs, in order, as `gap_ms`: 81, 83, 99, 102, 89, 90, 102, 74, 96, 99, 94, 9
 
 ## Errors
 
-A failed command records an error code, the user-facing text for it, and a detail string: the path, the engine's own message, or the reason. They are read with `LastError()`, `LastErrorText()` (or `TextFor(code)`) and `LastErrorDetail()`. A failed `Play`, `Next`, `Prev` or `Resume` leaves the state `error` and no file open.
+A failed command records an error code, the user-facing text for it, and a detail string: the path, the engine's own message, or the reason. They are read with `LastError()`, `LastErrorText()` (or `TextFor(code)`) and `LastErrorDetail()`. A failed `Play` or `Resume`, a `Next` or `Prev` whose track fails to open, or a decode error found by `Tick` leaves the state `error` and no file open. A rejected transition leaves the state unchanged and records `BadArgument`.
 
 | Code | Text | Detail |
 | --- | --- | --- |
