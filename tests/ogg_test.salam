@@ -19,7 +19,7 @@
 // so its album, which sits after the boundary, proves the assembler joins
 // pages; tone.ogg parses but carries nothing and so stays untagged; and input
 // that is not a whole Vorbis comment packet (a WAV head, text, a head cut in
-// the middle of the comment page) is refused with nothing left allocated. The
+// the middle of the comment page, a comment packet over the size cap) is refused with nothing left allocated. The
 // ID3 path is checked once more so the dispatch cannot have broken it.
 
 import audio.tag
@@ -83,6 +83,11 @@ func untaggedTests:
 end
 
 func refusedTests:
+    // A 70000 byte comment packet is over the 64 KiB cap: untagged, not a crash.
+    big := read("big-comment.ogg")
+    testing.AssertFalse(big.tagged)
+    testing.AssertEqStr(big.title, "big-comment")
+
     mut out := tag.NewTags()
     testing.AssertFalse(readTags("tone.wav", library.HeadCap, out))
     testing.AssertFalse(library.ReadOggTags("not ogg" as void*, 7, out))

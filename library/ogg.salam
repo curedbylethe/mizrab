@@ -31,7 +31,6 @@ package library
 
 import audio.tag
 import mem
-import str
 
 const oggMaxPages := 64
 const oggMaxComments := 64
