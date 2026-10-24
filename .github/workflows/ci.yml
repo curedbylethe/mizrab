@@ -21,6 +21,11 @@ jobs:
         with:
           submodules: recursive
 
+      # The licence header gate needs git only, so it runs before the compiler
+      # steps: both matrix legs check it and a bad file fails fast, by name.
+      - name: Check the licence headers
+        run: make header-check
+
       # The compiler version is read from .salam-version, not repeated here:
       # one source for the pin, so CI cannot drift from the file.
       - name: Read the Salam pin

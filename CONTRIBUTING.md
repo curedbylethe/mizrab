@@ -70,7 +70,8 @@ checks and adding a test. Run one with `sh tests/run.sh <name>`.
 - `salam format` is the authority. Run `make fmt` before committing;
   `make fmt-check` is the gate that rejects unformatted files.
 - Indent with 4 spaces (`.editorconfig` matches the formatter).
-- Every file starts with the project licence header comment.
+- Every file starts with the project licence header comment; `make header-check`
+  fails, naming the file, when one does not.
 - Declaration order is imports, then `include`s, then declarations; the
   formatter enforces this order (`--fix-order` is on by default) and the
   compiler rejects the wrong order outright.
