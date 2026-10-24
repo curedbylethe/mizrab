@@ -1,0 +1,119 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The recursive walk: every audio file under a root, with the size and mtime
+// the index needs, in one deterministic order.
+//
+// Policy, in one place:
+//   symlinks   any entry lstat reports as a link is skipped, file or directory,
+//              so nothing is indexed twice and a cycle cannot form. The root
+//              argument itself may be a link: the first listing resolves it.
+//   ignore     names starting with "." are skipped, files and directories alike.
+//              There is no other skip list.
+//   formats    the extension allow-list below, compared case-insensitively.
+//   depth      directories deeper than maxDepth below the root are not entered.
+//   order      the result is sorted by raw path bytes, so two walks of an
+//              unchanged tree are identical.
+//   errors     os.ListDir has no error channel: an unreadable directory looks
+//              empty, contributes nothing and the walk carries on silently.
+// Paths are lexical: the root is made absolute with filepath.Abs, which does
+// not resolve symlinks, and every Entry.path is that spelling plus the names
+// found. Path bytes are never normalised.
+
+package library
+
+import filepath
+import mem
+import os
+import sort
+import str
+
+// The extensions Walk accepts, space separated. .opus is absent on purpose: the
+// decoder cannot open it, so indexing it would list tracks nobody can play.
+const audioExts := " .mp3 .flac .ogg .oga .wav "
+
+// How many directory levels below the root Walk will enter.
+const maxDepth := 32
+
+@en "Entry"
+/// One audio file found by Walk: its absolute path, size in bytes and mtime in
+/// nanoseconds since the epoch, both from a single lstat.
+pub struct Entry:
+    pub path: str = ""
+    pub size: i64 = 0
+    pub mtimeNs: i64 = 0
+end
+
+// True when `name` ends in an allow-listed extension, in any letter case.
+func isAudio(name: str): bool:
+    ext := filepath.Ext(name)
+    low := ext.lower()
+    mut ok := false
+    if ext.len() > 0:
+        probe := " ".concat(low).concat(" ")
+        ok = str.Contains(audioExts, probe)
+        mem.Free(probe as void*)
+    end
+    mem.Free(low as void*)
+    mem.Free(ext as void*)
+    ret ok
+end
+
+@en "Walk"
+/// Every audio file under `root`, as absolute paths sorted by path bytes. See
+/// the notes at the top of this file for the symlink, dot-name, depth and
+/// unreadable-directory rules. A root that does not exist yields an empty
+/// vector.
+pub func Walk(root: str): Vector<Entry>:
+    mut found := Vector {} as Vector<Entry>
+    mut dirs := Vector {} as Vector<str>
+    mut depths := Vector {} as Vector<int>
+    defer dirs.free()
+    defer depths.free()
+    dirs.push(filepath.Abs(root))
+    depths.push(0)
+
+    until dirs.len() > 0:
+        dir := dirs.pop()
+        depth := depths.pop()
+        names := os.ListDir(dir)
+        repeat names.len() in i:
+            name := names.get(i)
+            if str.StartsWith(name, "."):
+                continue
+            end
+            full := filepath.Join(dir, name)
+            st := StatPath(full)
+            if st.exists and st.isLink == false:
+                if st.isDir:
+                    if depth < maxDepth:
+                        dirs.push(full)
+                        depths.push(depth + 1)
+                        continue
+                    end
+                else if isAudio(name):
+                    found.push(Entry { path = full, size = st.size, mtimeNs = st.mtimeNs })
+                    continue
+                end
+            end
+            mem.Free(full as void*)
+        end
+        names.free()
+        mem.Free(dir as void*)
+    end
+
+    sort.StableSortBy(found, (a: Entry, b: Entry): ret str.Compare(a.path, b.path) < 0 end)
+    ret found
+end
