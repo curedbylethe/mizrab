@@ -32,55 +32,42 @@ import filepath
 import os
 
 @en "Paths"
-/// The four directories mizrab keeps its files in, each `<base>/mizrab`, plus
-/// why a directory is empty. A directory that cannot be resolved is "" and
-/// never a relative path; `problem` then names the first failure in a sentence
-/// the CLI can print as is, and is "" when all four resolved.
+/// The four directories mizrab keeps its files in, each `<base>/mizrab`. A
+/// directory that cannot be resolved is "" and never a relative path.
 pub struct Paths:
     pub config: str = ""
     pub data: str = ""
     pub cache: str = ""
     pub state: str = ""
-    pub problem: str = ""
 end
 
 // `<base>/mizrab` for one directory: `xdg` when it is absolute, else HOME plus
-// `fallback`, else "". Sets `problem` for the first failure only, so the
-// directory that failed first is the one named. Touches no file.
-func appDir(home: str, xdg: str, name: str, xdgVar: str, fallback: str, problem &: str): str:
+// `fallback`, else "". Touches no file.
+func appDir(home: str, xdg: str, fallback: str): str:
     mut base := ""
     if xdg != "" and filepath.IsAbs(xdg):
         base = filepath.Clean(xdg)
     else home != "":
         base = filepath.Clean(filepath.Join(home, fallback))
     end
-    if base != "":
-        ret filepath.Join(base, "mizrab")
+    if base == "":
+        ret ""
     end
-    if problem == "":
-        mut reason := xdgVar + " is unset"
-        if xdg != "":
-            reason = xdgVar + " is not absolute"
-        end
-        problem = "cannot resolve the " + name + " directory: " + reason + " and HOME is unset"
-    end
-    ret ""
+    ret filepath.Join(base, "mizrab")
 end
 
 @en "Resolve"
 /// Resolves the four directories from the five values a caller supplies, which
 /// is `FromEnv` with the environment read once by the caller. An empty value
 /// means unset. Each `xdg*` is used only when it is absolute; otherwise the
-/// directory falls back under `home`, and with no `home` it is "" with
-/// `problem` set. Trailing slashes are cleaned. Touches no file.
+/// directory falls back under `home`, and with no `home` it is "". Trailing
+/// slashes are cleaned. Touches no file.
 pub func Resolve(home: str, xdgConfig: str, xdgData: str, xdgCache: str, xdgState: str): Paths:
-    mut problem := ""
     mut p := Paths {}
-    p.config = appDir(home, xdgConfig, "config", "XDG_CONFIG_HOME", ".config", problem)
-    p.data = appDir(home, xdgData, "data", "XDG_DATA_HOME", ".local/share", problem)
-    p.cache = appDir(home, xdgCache, "cache", "XDG_CACHE_HOME", ".cache", problem)
-    p.state = appDir(home, xdgState, "state", "XDG_STATE_HOME", ".local/state", problem)
-    p.problem = problem
+    p.config = appDir(home, xdgConfig, ".config")
+    p.data = appDir(home, xdgData, ".local/share")
+    p.cache = appDir(home, xdgCache, ".cache")
+    p.state = appDir(home, xdgState, ".local/state")
     ret p
 end
 
@@ -95,8 +82,8 @@ pub func FromEnv(): Paths:
 end
 
 @en "ConfigFile"
-/// The config file, `<config>/mizrab/config.ini`, or "" when `config` is
-/// unresolved. Reads nothing.
+/// The config file, `config.ini` inside the config directory, or "" when
+/// `config` is unresolved. Reads nothing.
 pub func ConfigFile(p: Paths): str:
     if p.config == "":
         ret ""
@@ -105,9 +92,9 @@ pub func ConfigFile(p: Paths): str:
 end
 
 @en "IndexFile"
-/// Where the index lives when the caller names none, `<data>/mizrab/index.json`,
-/// or "" when `data` is unresolved. The data directory, not the cache
-/// directory: the index can be rebuilt, but playlists refer to its track IDs
+/// Where the index lives when the caller names none, `index.json` inside the
+/// data directory, or "" when `data` is unresolved. The data directory, not the
+/// cache directory: the index can be rebuilt, but playlists refer to its track IDs
 /// and a cache cleaner deleting it would be a worse surprise than an unusual
 /// location. Pass an explicit path to use the cache directory instead. Unlike
 /// the library's old default, this is "" and not a relative path when HOME is

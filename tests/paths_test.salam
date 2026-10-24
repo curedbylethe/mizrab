@@ -16,12 +16,11 @@
 // Covers the path rule in config.Resolve with literal arguments, so no real
 // environment is needed: four absolute XDG values win, empty ones fall back
 // under HOME, a relative one is ignored, a trailing slash is cleaned, and no
-// HOME at all yields "" plus the sentence the CLI prints. Then the two file
-// helpers, and FromEnv against the same five reads done by the test, which
-// proves the wiring without depending on the developer's own values.
+// HOME at all yields "". Then the two file helpers, and FromEnv against the
+// same five reads done by the test, which proves the wiring without depending
+// on the developer's own values.
 
 import os
-import str
 import testing
 
 include "../config/config.salam"
@@ -32,7 +31,6 @@ func absoluteTests:
     testing.AssertEqStr(p.data, "/x/data/mizrab")
     testing.AssertEqStr(p.cache, "/x/cache/mizrab")
     testing.AssertEqStr(p.state, "/x/state/mizrab")
-    testing.AssertEqStr(p.problem, "")
 end
 
 func fallbackTests:
@@ -41,14 +39,12 @@ func fallbackTests:
     testing.AssertEqStr(p.data, "/home/u/.local/share/mizrab")
     testing.AssertEqStr(p.cache, "/home/u/.cache/mizrab")
     testing.AssertEqStr(p.state, "/home/u/.local/state/mizrab")
-    testing.AssertEqStr(p.problem, "")
 end
 
 // A relative variable is not absolute and so unused, per the XDG spec.
 func relativeTests:
     p := config.Resolve("/home/u", "rel", "", "", "")
     testing.AssertEqStr(p.config, "/home/u/.config/mizrab")
-    testing.AssertEqStr(p.problem, "")
 end
 
 func trailingSlashTests:
@@ -59,20 +55,13 @@ func trailingSlashTests:
     testing.AssertEqStr(p.state, "/x/state/mizrab")
 end
 
-// Four "" and one sentence; never a relative path.
+// Four ""; never a relative path.
 func unresolvedTests:
     p := config.Resolve("", "", "", "", "")
     testing.AssertEqStr(p.config, "")
     testing.AssertEqStr(p.data, "")
     testing.AssertEqStr(p.cache, "")
     testing.AssertEqStr(p.state, "")
-    testing.AssertTrue(str.StartsWith(p.problem, "cannot resolve the config directory: "))
-
-    // The first failure names the variable and why it was rejected.
-    testing.AssertEqStr(
-        config.Resolve("", "rel", "", "", "").problem,
-        "cannot resolve the config directory: XDG_CONFIG_HOME is not absolute and HOME is unset",
-    )
 end
 
 func fileTests:
@@ -94,7 +83,6 @@ func envTests:
     testing.AssertEqStr(got.data, want.data)
     testing.AssertEqStr(got.cache, want.cache)
     testing.AssertEqStr(got.state, want.state)
-    testing.AssertEqStr(got.problem, want.problem)
 end
 
 func main:
