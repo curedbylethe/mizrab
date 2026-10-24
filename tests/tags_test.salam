@@ -1,0 +1,114 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the track reader: the two hand-built tagged fixtures (tagged.mp3 with
+// ID3v2.3 in UTF-16 and UTF-8, tagged.flac with Vorbis comments and STREAMINFO)
+// must report tagged, or the whole stage proves nothing; the untagged control
+// files fall back to the filename stem; FLAC alone has a duration; and the ID
+// is the first 16 hex characters of a path hash, the same for a relative and an
+// absolute spelling. One non-ASCII title survives a JSON round trip untouched.
+
+import encoding.encerr
+import encoding.json
+import filepath
+import str
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+// The strings tests/fixtures/gen_tags.py writes.
+mp3Title := "T\u014dne Caf\u00e9"
+mp3Artist := "Mizrab Tester"
+album := "Fixture Album"
+
+// Reads fixtures/<name> through Walk-style data: size and mtime from lstat.
+func read(name: str): library.Track:
+    path := filepath.Join("fixtures", name)
+    st := library.StatPath(path)
+    ret library.ReadTrack(library.Entry { path = filepath.Abs(path), size = st.size, mtimeNs = st.mtimeNs })
+end
+
+func taggedTests:
+    m := read("tagged.mp3")
+    testing.AssertTrue(m.tagged)
+    testing.AssertEqStr(m.title, mp3Title)
+    testing.AssertEqStr(m.artist, mp3Artist)
+    testing.AssertEqStr(m.album, album)
+    testing.AssertEqStr(m.format, "mp3")
+    testing.AssertEqInt64(m.durationMs, 0 as i64)
+    testing.AssertEqInt64(m.size, 11164 as i64)
+    testing.AssertTrue(m.mtimeNs > 0)
+    testing.AssertEqStr(m.path, filepath.Abs("fixtures/tagged.mp3"))
+
+    f := read("tagged.flac")
+    testing.AssertTrue(f.tagged)
+    testing.AssertEqStr(f.title, "Tone FLAC")
+    testing.AssertEqStr(f.artist, mp3Artist)
+    testing.AssertEqStr(f.album, album)
+    testing.AssertEqStr(f.format, "flac")
+    testing.AssertEqInt(f.track, 3)
+    testing.AssertEqInt(f.trackTotal, 12)
+    testing.AssertEqInt(f.year, 2004)
+    testing.AssertEqInt64(f.durationMs, 1500 as i64)
+    testing.AssertEqInt64(f.size, 25325 as i64)
+end
+
+func untaggedTests:
+    names := ["tone.mp3", "tone.wav", "tone.flac"]
+    formats := ["mp3", "wav", "flac"]
+    durations := [0 as i64, 0 as i64, 1500 as i64]
+    repeat 3 in i:
+        t := read(names[i])
+        testing.AssertFalse(t.tagged)
+        testing.AssertEqStr(t.title, "tone")
+        testing.AssertEqStr(t.format, formats[i])
+        testing.AssertEqInt64(t.durationMs, durations[i])
+    end
+end
+
+func idTests:
+    rel := library.TrackId("fixtures/tone.flac")
+    testing.AssertEqStr(rel, library.TrackId(filepath.Abs("fixtures/tone.flac")))
+    testing.AssertNeStr(rel, library.TrackId("fixtures/tone.mp3"))
+    testing.AssertEqInt(rel.len(), 16)
+    mut hex := true
+    repeat rel.len() in i:
+        if str.Contains("0123456789abcdef", str.CharAt(rel, i)) == false:
+            hex = false
+        end
+    end
+    testing.AssertTrue(hex)
+    testing.AssertEqStr(read("tone.flac").id, rel)
+end
+
+func jsonTests:
+    t := read("tagged.mp3")
+    text := json.Marshal(t)
+    mut back := library.Track {}
+    mut err := encerr.EncodingError {}
+    testing.AssertTrue(json.Unmarshal(text, back, err))
+    testing.AssertEqStr(back.title, mp3Title)
+    testing.AssertEqStr(back.id, t.id)
+end
+
+func main:
+    taggedTests()
+    untaggedTests()
+    idTests()
+    jsonTests()
+    ret testing.Summary()
+end
