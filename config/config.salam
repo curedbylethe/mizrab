@@ -1,0 +1,121 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Where mizrab keeps its files, resolved in one place so no other package reads
+// the environment for a path. Package config is the directory and this file is
+// its entry and its whole surface.
+//
+//   config  $XDG_CONFIG_HOME/mizrab   ~/.config/mizrab
+//   data    $XDG_DATA_HOME/mizrab     ~/.local/share/mizrab
+//   cache   $XDG_CACHE_HOME/mizrab    ~/.cache/mizrab
+//   state   $XDG_STATE_HOME/mizrab    ~/.local/state/mizrab
+//
+// A variable that is set but not absolute is ignored, per the XDG spec. A
+// fallback needs HOME. Nothing here creates a directory or opens a file, so a
+// read-only or missing directory is not an error until a caller writes.
+
+package config
+
+import filepath
+import os
+
+@en "Paths"
+/// The four directories mizrab keeps its files in, each `<base>/mizrab`, plus
+/// why a directory is empty. A directory that cannot be resolved is "" and
+/// never a relative path; `problem` then names the first failure in a sentence
+/// the CLI can print as is, and is "" when all four resolved.
+pub struct Paths:
+    pub config: str = ""
+    pub data: str = ""
+    pub cache: str = ""
+    pub state: str = ""
+    pub problem: str = ""
+end
+
+// `<base>/mizrab` for one directory: `xdg` when it is absolute, else HOME plus
+// `fallback`, else "". Sets `problem` for the first failure only, so the
+// directory that failed first is the one named. Touches no file.
+func appDir(home: str, xdg: str, name: str, xdgVar: str, fallback: str, problem &: str): str:
+    mut base := ""
+    if xdg != "" and filepath.IsAbs(xdg):
+        base = filepath.Clean(xdg)
+    else home != "":
+        base = filepath.Clean(filepath.Join(home, fallback))
+    end
+    if base != "":
+        ret filepath.Join(base, "mizrab")
+    end
+    if problem == "":
+        mut reason := xdgVar + " is unset"
+        if xdg != "":
+            reason = xdgVar + " is not absolute"
+        end
+        problem = "cannot resolve the " + name + " directory: " + reason + " and HOME is unset"
+    end
+    ret ""
+end
+
+@en "Resolve"
+/// Resolves the four directories from the five values a caller supplies, which
+/// is `FromEnv` with the environment read once by the caller. An empty value
+/// means unset. Each `xdg*` is used only when it is absolute; otherwise the
+/// directory falls back under `home`, and with no `home` it is "" with
+/// `problem` set. Trailing slashes are cleaned. Touches no file.
+pub func Resolve(home: str, xdgConfig: str, xdgData: str, xdgCache: str, xdgState: str): Paths:
+    mut problem := ""
+    mut p := Paths {}
+    p.config = appDir(home, xdgConfig, "config", "XDG_CONFIG_HOME", ".config", problem)
+    p.data = appDir(home, xdgData, "data", "XDG_DATA_HOME", ".local/share", problem)
+    p.cache = appDir(home, xdgCache, "cache", "XDG_CACHE_HOME", ".cache", problem)
+    p.state = appDir(home, xdgState, "state", "XDG_STATE_HOME", ".local/state", problem)
+    p.problem = problem
+    ret p
+end
+
+@en "FromEnv"
+/// `Resolve` over the process environment: HOME and the four XDG_* variables.
+/// The four XDG_* variables are the override; the project adds none of its own.
+pub func FromEnv(): Paths:
+    ret Resolve(
+        os.Env("HOME"), os.Env("XDG_CONFIG_HOME"), os.Env("XDG_DATA_HOME"), os.Env("XDG_CACHE_HOME"),
+        os.Env("XDG_STATE_HOME"),
+    )
+end
+
+@en "ConfigFile"
+/// The config file, `<config>/mizrab/config.ini`, or "" when `config` is
+/// unresolved. Reads nothing.
+pub func ConfigFile(p: Paths): str:
+    if p.config == "":
+        ret ""
+    end
+    ret filepath.Join(p.config, "config.ini")
+end
+
+@en "IndexFile"
+/// Where the index lives when the caller names none, `<data>/mizrab/index.json`,
+/// or "" when `data` is unresolved. The data directory, not the cache
+/// directory: the index can be rebuilt, but playlists refer to its track IDs
+/// and a cache cleaner deleting it would be a worse surprise than an unusual
+/// location. Pass an explicit path to use the cache directory instead. Unlike
+/// the library's old default, this is "" and not a relative path when HOME is
+/// unset, so the caller must refuse rather than scan into the working
+/// directory. Reads nothing.
+pub func IndexFile(p: Paths): str:
+    if p.data == "":
+        ret ""
+    end
+    ret filepath.Join(p.data, "index.json")
+end
