@@ -52,8 +52,9 @@ func findTrack(prev: Index, path: str): int:
     ret 0 - 1
 end
 
-// The one comparison ScanPlan, MergeScan and Scan's counters all use:
+// The comparison ScanPlan and Scan's counter use:
 // 0 unchanged, 1 added (no stored track), 2 updated (size or mtime differ).
+// MergeScan repeats it inline because it needs the matched index too.
 func classify(prev: Index, e: Entry): int:
     at := findTrack(prev, e.path)
     if at < 0:
@@ -92,8 +93,9 @@ end
 pub func MergeScan(prev: Index, walked: Vector<Entry>, fresh: Vector<Track>): Index:
     mut idx := EmptyIndex()
     repeat walked.len() in i:
-        if classify(prev, walked[i]) == 0:
-            idx.tracks.push(prev.tracks[findTrack(prev, walked[i].path)])
+        at := findTrack(prev, walked[i].path)
+        if at >= 0 and prev.tracks[at].size == walked[i].size and prev.tracks[at].mtimeNs == walked[i].mtimeNs:
+            idx.tracks.push(prev.tracks[at])
             continue
         end
         repeat fresh.len() in j:
