@@ -25,6 +25,7 @@
 //   track.salam     Track, TrackId, ReadTrack: tags and duration from a file head.
 //   ogg.salam       ReadOggTags: Vorbis comments from an Ogg head (page assembler).
 //   index.salam     Index, LoadIndex, SaveIndex: the versioned JSON file, atomic save.
+//   scan.salam      ScanPlan, MergeScan, Scan: incremental rescan by size and mtime.
 // Each later file adds its name to this list.
 //
 // Every extern below is declared once for the whole package; a second extern
