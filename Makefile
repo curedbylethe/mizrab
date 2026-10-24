@@ -19,6 +19,8 @@ MINT_VERSION := $(shell cat .mint-version)
 MINIAUDIO_DIR := audio
 MINIAUDIO_OBJ := $(BUILD)/miniaudio.o
 SHIM_OBJ := $(BUILD)/ma_shim.o
+LIBRARY_DIR := library
+LIBRARY_OBJ := $(BUILD)/library_shim.o
 MINIAUDIO_DEFS := -DMA_NO_ENCODING -DMA_NO_GENERATION -DMA_NO_RESOURCE_MANAGER \
 	-DMA_NO_NODE_GRAPH -DMA_NO_ENGINE
 
@@ -51,7 +53,7 @@ help:
 deps:
 	$(SALAM) deps
 
-build: deps $(MINIAUDIO_OBJ) $(SHIM_OBJ)
+build: deps $(MINIAUDIO_OBJ) $(SHIM_OBJ) $(LIBRARY_OBJ)
 	@mkdir -p $(BUILD)
 	$(SALAM) build $(ENTRY) --output=$(BIN) $(FLAGS)
 
@@ -128,6 +130,10 @@ $(MINIAUDIO_OBJ): $(MINIAUDIO_DIR)/miniaudio.c $(MINIAUDIO_DIR)/miniaudio.h $(MI
 $(SHIM_OBJ): $(MINIAUDIO_DIR)/ma_shim.c $(MINIAUDIO_DIR)/ma_shim.h $(MINIAUDIO_DIR)/miniaudio.h
 	@mkdir -p $(BUILD)
 	$(CC) -c -O2 -I$(MINIAUDIO_DIR) $(MINIAUDIO_DEFS) -o $@ $<
+
+$(LIBRARY_OBJ): $(LIBRARY_DIR)/library_shim.c $(LIBRARY_DIR)/library_shim.h
+	@mkdir -p $(BUILD)
+	$(CC) -c -O2 -o $@ $<
 
 soak: build
 	sh tests/soak.sh
