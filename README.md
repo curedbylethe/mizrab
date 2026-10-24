@@ -40,7 +40,7 @@ gate compares against the index, so stage or commit page edits first.
 
 Prerequisites:
 
-- **Salam 0.5.6.** The pinned compiler version lives in `.salam-version`;
+- **Salam 0.5.9.** The pinned compiler version lives in `.salam-version`;
   `salam version` must report exactly that. Build or install it from the
   [Salam repository](https://github.com/SalamLang/Salam) — there is no separate
   mizrab installer.
