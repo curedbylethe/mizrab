@@ -26,6 +26,19 @@ OUT="$ROOT/build/tests"
 BIN="$ROOT/build/mizrab"
 mkdir -p "$OUT"
 
+# The binary now reads a config file, so a smoke check must not depend on the
+# developer's ~/.config: point HOME and the four XDG variables under $OUT, and
+# every invocation of this script reads and writes only under build/tests/.
+# The compiler keeps its packages under ~/.salam, so it gets the real HOME back.
+TOOL_HOME="${HOME:-}"
+mkdir -p "$OUT/home" "$OUT/xdg-config" "$OUT/xdg-data" "$OUT/xdg-cache" "$OUT/xdg-state"
+HOME="$OUT/home"
+XDG_CONFIG_HOME="$OUT/xdg-config"
+XDG_DATA_HOME="$OUT/xdg-data"
+XDG_CACHE_HOME="$OUT/xdg-cache"
+XDG_STATE_HOME="$OUT/xdg-state"
+export HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
+
 if [ ! -x "$BIN" ]; then
     echo "tests: $BIN is missing; run 'make build' first" >&2
     exit 1
@@ -37,6 +50,16 @@ if [ "$(uname -s)" = "Darwin" ] && [ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]; then
     MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)
     export MACOSX_DEPLOYMENT_TARGET
 fi
+
+# Builds one test with the compiler's own HOME, so its package lookup still
+# works while $BIN runs with the isolated one.
+build_test() {
+    if [ -n "$TOOL_HOME" ]; then
+        HOME="$TOOL_HOME" "$SALAM" build "$1" --output="$2" --backend=llvm --log-level=warn
+        return
+    fi
+    "$SALAM" build "$1" --output="$2" --backend=llvm --log-level=warn
+}
 
 # No names on the command line: every tests/*_test.salam.
 if [ "$#" -eq 0 ]; then
@@ -60,7 +83,7 @@ for name in "$@"; do
     bin="$OUT/$name"
     got="$OUT/$name.stdout"
 
-    if ! "$SALAM" build "$src" --output="$bin" --backend=llvm --log-level=warn; then
+    if ! build_test "$src" "$bin"; then
         echo "FAIL $name (build)"
         fail=$((fail + 1))
         continue
@@ -190,6 +213,67 @@ if [ "$code" -ne 2 ]; then
     fail=$((fail + 1))
 else
     echo "ok   cli: --scan no root"
+fi
+
+# A config file that cannot be trusted stops the run before any work, and the
+# message names the file and the offending line.
+printf '[library]\nroots = fixtures\nnonsense\n' > "$OUT/bad.ini"
+"$BIN" --config "$OUT/bad.ini" --scan fixtures > "$OUT/cli-config-bad.stdout" 2>&1
+code=$?
+if [ "$code" -ne 2 ]; then
+    echo "FAIL cli: config broken (exit $code, want 2)"
+    fail=$((fail + 1))
+elif ! grep -q ":3:" "$OUT/cli-config-bad.stdout"; then
+    echo "FAIL cli: config broken (no ':3:' in the message)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: config broken"
+fi
+
+# A config file in XDG_CONFIG_HOME supplies the roots when no positional root is
+# given. The explicit --index keeps the index under $OUT.
+rm -f "$OUT/scan-cfg.json"
+mkdir -p "$XDG_CONFIG_HOME/mizrab"
+printf '[library]\nroots = fixtures\n' > "$XDG_CONFIG_HOME/mizrab/config.ini"
+"$BIN" --scan --index "$OUT/scan-cfg.json" > "$OUT/cli-scan-config.stdout" 2>&1
+code=$?
+rm -f "$XDG_CONFIG_HOME/mizrab/config.ini"
+if [ "$code" -ne 0 ]; then
+    echo "FAIL cli: config roots (exit $code)"
+    fail=$((fail + 1))
+elif ! grep -q "^mizrab: scanned " "$OUT/cli-scan-config.stdout"; then
+    echo "FAIL cli: config roots (no summary line)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: config roots"
+fi
+
+# An explicitly named config that is not there is an error, not a silent fall
+# back to the defaults.
+"$BIN" --config "$OUT/there-is-no.ini" --scan fixtures > "$OUT/cli-config-missing.stdout" 2>&1
+code=$?
+if [ "$code" -ne 2 ]; then
+    echo "FAIL cli: config missing (exit $code, want 2)"
+    fail=$((fail + 1))
+elif ! grep -q "cannot read" "$OUT/cli-config-missing.stdout"; then
+    echo "FAIL cli: config missing (no 'cannot read')"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: config missing"
+fi
+
+# --version is answered before the file is read, so a broken file in the same
+# command line changes nothing.
+"$BIN" --version --config "$OUT/bad.ini" > "$OUT/cli-config-version.stdout" 2>&1
+code=$?
+if [ "$code" -ne 0 ]; then
+    echo "FAIL cli: config after --version (exit $code, want 0)"
+    fail=$((fail + 1))
+elif ! grep -qx "mizrab 0.0.1" "$OUT/cli-config-version.stdout"; then
+    echo "FAIL cli: config after --version (does not print 'mizrab 0.0.1')"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: config after --version"
 fi
 
 echo "$pass passed, $fail failed"
