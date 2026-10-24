@@ -1,0 +1,149 @@
+---
+title: "Configuration"
+description: "Where mizrab keeps its files, the config file it reads, its precedence and the keys it accepts."
+keywords:
+  - "configuration"
+  - "config"
+  - "xdg"
+  - "index"
+  - "roots"
+  - "keymap"
+---
+
+mizrab reads one optional config file and takes two settings from it: the scan roots and the index path. A missing file is not an error, and nothing here writes to disk.
+
+## Where mizrab keeps files
+
+Four directories, each `<base>/mizrab`, resolved in one place from `HOME` and the four XDG variables:
+
+| Variable | Fallback under `HOME` | Directory | Holds |
+| --- | --- | --- | --- |
+| `XDG_CONFIG_HOME` | `.config` | `<config>/mizrab` | `config.ini` |
+| `XDG_DATA_HOME` | `.local/share` | `<data>/mizrab` | `index.json` |
+| `XDG_CACHE_HOME` | `.cache` | `<cache>/mizrab` | nothing yet |
+| `XDG_STATE_HOME` | `.local/state` | `<state>/mizrab` | nothing yet |
+
+A variable that is set but not absolute is ignored, as the XDG spec says, and the fallback under `HOME` is used instead. Trailing slashes are cleaned.
+
+The index lives in the data directory, not the cache directory: it can be rebuilt, but playlists will refer to its track IDs, and a cache cleaner deleting it would be a worse surprise than an unusual location. An explicit `--index` or `library.index` overrides it wherever you point it.
+
+## The config file
+
+mizrab reads `$XDG_CONFIG_HOME/mizrab/config.ini`, which is `~/.config/mizrab/config.ini` when that variable is unset. Nothing else is read. `--config FILE` reads exactly the file it names: an explicit path that does not exist is an error, not a fall back to the defaults.
+
+The format is an INI subset:
+
+- `#` or `;` starts a comment; a blank line changes nothing.
+- `[library]` opens the section `library`. It is the only section.
+- `key = value` sets a key in the open section.
+- A value is taken literally after trimming: no quotes, no inline comments, no escapes and no continuation lines, so what the file says is exactly the value.
+- A duplicate key is not an error; the last one wins.
+
+Every line that is none of those shapes is an error, reported with its line number.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `library.index` | string | The index file. Absolute, or empty for `<data>/mizrab/index.json`. A relative path is an error. No `~` expansion. |
+| `library.roots` | list | Scan roots, comma-separated, each trimmed. An empty entry is an error. No `~` expansion. |
+
+Why this format rather than JSON, TOML or the standard library's INI reader: JSON lost on comments, which the commented sample needs; TOML lost on errors, because its strict decoder reports only success or failure, so naming a line would need a second pass; and `std/config.ParseINI` skips a malformed line silently and returns no line at all, which is the criterion. So the reader is mizrab's own, over string operations, and the line number is the loop index. The decision and the alternatives are recorded in the module comment of `config/settings.salam`.
+
+## Precedence
+
+Lowest first: the defaults, then the file, then a flag on the command line.
+
+- `--index FILE` beats `library.index`.
+- The positional roots after `--scan` beat `library.roots`.
+- A setting left out of the file keeps the value below it.
+
+A level counts as present when it is non-empty. So a file that sets only `roots` leaves the index path to the default, and `--scan --index out.json` with a config that also sets `library.index` uses `out.json`.
+
+With `[library] roots = /music` in the file:
+
+```sh
+mizrab --scan --index /tmp/out.json   # scans /music, writes /tmp/out.json
+mizrab --scan /other                  # scans /other
+```
+
+## The sample
+
+`config/config.sample.ini` is the file to copy. Every key is present but commented out, so as shipped it changes nothing, and a test loads it and fails if it drifts from the defaults.
+
+```ini
+# mizrab configuration.
+#
+# Read from $XDG_CONFIG_HOME/mizrab/config.ini, which is
+# ~/.config/mizrab/config.ini when that variable is unset. A missing file is not
+# an error: the values below are the defaults and a missing file means all of
+# them.
+#
+# Precedence, lowest first: these defaults, then this file, then a flag on the
+# command line. A setting left out, or left commented out, keeps the value from
+# the level below it.
+#
+# Format: `#` or `;` starts a comment, blank lines are ignored, `[library]` opens
+# a section and `key = value` sets a key in it. Values are literal after
+# trimming: no quotes, no inline comments, no escapes, no continuation lines.
+# A duplicate key is not an error; the last one wins.
+#
+# A bad line is reported as `mizrab: <path>:<line>: <text>` and mizrab exits with
+# status 2 before it reads or writes anything.
+#
+# Every key is present below but commented out, so this file as shipped changes
+# nothing. A test loads it and fails if it drifts from the defaults.
+
+[library]
+
+# The index file. Absolute, or empty for $XDG_DATA_HOME/mizrab/index.json
+# (~/.local/share/mizrab/index.json). No ~ expansion: write the path out.
+# index = /home/you/music/.mizrab-index.json
+
+# Directories to scan, comma-separated, each taken literally. An empty entry is
+# an error and a root cannot contain a comma. No ~ expansion.
+# roots = /home/you/music, /mnt/archive/music
+```
+
+## Errors
+
+A bad line is one line on stdout and exit status 2:
+
+```text
+mizrab: /home/you/.config/mizrab/config.ini:3: expected 'key = value'
+```
+
+The shape is `mizrab: <path>:<line>: <text>`. The file is read and validated before any work starts, so a bad config never leaves a half-written index or a half-built state: nothing is read and nothing is written. An explicit `--config` that names no file is `mizrab: cannot read <path>`, also exit 2; a file that exists but cannot be opened reports line 0 in the same shape.
+
+`--help` and `--version` are answered before the config is consulted, so a broken file cannot block them.
+
+## Degrading
+
+- **No file at the default path.** Defaults, and no message: a missing default file is not reported.
+- **Nothing is created.** mizrab never makes a directory and never writes a default file, so a read-only or absent config directory is harmless.
+- **`HOME` unset, `XDG_*` unset.** There is no default config location, so no file is read. The index path then needs `--index` or `library.index`; without one, a scan prints `mizrab: cannot find a data directory; pass --index` and exits 2 instead of writing into the working directory.
+- **Non-scan invocations.** A bare `mizrab` prints its usage and exits 0, as before. A broken config still exits 2, and that is deliberate.
+
+## Keys
+
+The keymap is not in the binary yet. `ui/keymap.salam` declares the nine verbs and the keys that report them: basalam's vim preset plus four bindings of mizrab's own.
+
+| Key | Action | Source |
+| --- | --- | --- |
+| `h`, `j`, `k`, `l` | focus left, down, up, right | basalam preset |
+| `Tab` | focus the next widget | basalam preset |
+| Arrows | focus up, down, left, right | basalam preset |
+| `gg` | top of the focused widget's column | basalam preset |
+| `G` | bottom of the focused widget's column | basalam preset |
+| `Esc` | pop the focus stack, while one is pushed | basalam preset |
+| `/` | search | basalam preset, through its hook |
+| `space` | play or pause | mizrab |
+| `n` | next track | mizrab |
+| `p` | previous track | mizrab |
+| `:` | command line | mizrab |
+
+The set is fixed in this release: there is no `[keys]` section and no remapping. `h/j/k/l`, `Tab`, the arrows, `gg`, `G`, `Esc` and `/` come from basalam's `NewVimKeymap` preset, while `space`, `n`, `p` and `:` are mizrab's own bindings on top of it.
+
+## Limits
+
+- **macOS and Linux only.** There is no Windows build and no Windows path handling.
+- **No `~` expansion.** A path in the file or on the command line is used exactly as written; write the absolute path out. `library.index` must be absolute.
+- **A root cannot contain a comma.** The roots value is split on commas, so a directory whose name holds one cannot be named there; scan it with a positional argument instead.

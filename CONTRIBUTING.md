@@ -56,7 +56,8 @@ the `.mdx` files at the repository root.
 ## Repository layout
 
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
-every directory, including the reserved application-layer packages.
+every directory, including `config/`, which the binary reads at startup, and
+`ui/`, which the binary does not include yet.
 
 ## Tests
 

@@ -29,6 +29,8 @@ For each test program, `tests/run.sh`:
 
 The harness needs `build/mizrab` and stops if it is missing, which is why `make test` builds first. Calling the harness directly needs a prior `make build`.
 
+Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` variables at directories under `build/tests/`, so a test that needs a config file writes one there and never in the real home.
+
 ## The test programs
 
 | Test | Covers |
@@ -46,6 +48,9 @@ The harness needs `build/mizrab` and stops if it is missing, which is why `make 
 | `ogg_test` | the Ogg Vorbis comment reader: a re-muxed file, a comment packet split across pages, an oversize packet and input that is not a whole comment packet |
 | `index_test` | the index file: a save and load round trip, byte-identical output, and every rejection that falls back to an empty index |
 | `rescan_test` | `ScanPlan` and `MergeScan` on hand-built data, then `Scan` on real files: what is re-read, what is kept, what drops out |
+| `paths_test` | the [configuration](/configuration) path rule: four absolute XDG values, the fallbacks under `HOME`, a relative variable ignored, a trailing slash cleaned, no `HOME` at all, and the two file helpers |
+| `config_test` | the config reader: the shipped sample loading to the defaults, both keys, every rejection with its line number, a duplicate key, a missing file, and the precedence defaults \< file \< flag |
+| `keymap_test` | the keymap on a headless screen: the preset directions and `/`, `Tab` and the arrows, and the four keys mizrab binds itself, with no terminal |
 | `unicode_test` | the measured Unicode record: byte, codepoint, grapheme and `term.Width` numbers for a fixed corpus, and how titles sort |
 
 `decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The library tests link `build/library_shim.o`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
@@ -54,7 +59,7 @@ The harness needs `build/mizrab` and stops if it is missing, which is why `make 
 
 ## The binary smoke checks
 
-After the test programs, eight checks run against the real binary rather than a test program. They run on every invocation, including a single named test:
+After the test programs, twelve checks run against the real binary rather than a test program. They run on every invocation, including a single named test:
 
 - `--version` exits 0 and prints the pinned version;
 - `--help` exits 0 and prints the usage line;
@@ -62,7 +67,11 @@ After the test programs, eight checks run against the real binary rather than a 
 - `--scan` writes an index and prints the summary line;
 - a second `--scan` of the same root reads nothing and writes the same bytes;
 - the index carries the schema number;
-- a missing root exits 1 and a missing root argument exits 2.
+- a missing root exits 1 and a missing root argument exits 2;
+- a config file with a bad line exits 2 and the message names the line;
+- a config file in `XDG_CONFIG_HOME` supplies the roots to a `--scan` with no positional root;
+- an explicitly named config that does not exist exits 2 with `cannot read`;
+- `--version --config` still prints the version and exits 0, so the file is not read on the fast path.
 
 They count towards the failure total only; the `N passed, M failed` summary counts test programs.
 
