@@ -12,5 +12,4 @@ library/
 player/
 tests/
 ui/
-vendor/
 FINDINGS.md
