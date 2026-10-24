@@ -1,0 +1,93 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Incremental rescan: decide which files need their tags read again, merge the
+// result with the previous index, and orchestrate a scan. A file is unchanged
+// when its path, size and mtime all match the stored track; only then is the
+// stored track kept as is, ID and all. ScanPlan and MergeScan are pure: they
+// take data and return data, never touch the filesystem, and so can be tested
+// without real files. Scan is the only function here that touches disk.
+
+package library
+
+import sort
+import str
+
+// Where `path` sits in prev.tracks, or -1.
+// shortcut: linear scan, O(tracks) per lookup; the index is sorted by path so a
+// binary search fits if a very large library makes it slow.
+func findTrack(prev: Index, path: str): int:
+    repeat prev.tracks.len() in i:
+        if prev.tracks[i].path == path:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+// The one comparison ScanPlan, MergeScan and Scan's counters all use:
+// 0 unchanged, 1 added (no stored track), 2 updated (size or mtime differ).
+func classify(prev: Index, e: Entry): int:
+    at := findTrack(prev, e.path)
+    if at < 0:
+        ret 1
+    end
+    if prev.tracks[at].size != e.size or prev.tracks[at].mtimeNs != e.mtimeNs:
+        ret 2
+    end
+    ret 0
+end
+
+@en "ScanPlan"
+/// The walked entries whose tags must be read: those with no stored track in
+/// `prev` (new) and those whose size or mtimeNs differ from it (changed), in
+/// path order. An entry that matches on path, size and mtimeNs is left out and
+/// is never re-read. Pure.
+pub func ScanPlan(prev: Index, walked: Vector<Entry>): Vector<Entry>:
+    mut plan := Vector {} as Vector<Entry>
+    repeat walked.len() in i:
+        if classify(prev, walked[i]) != 0:
+            plan.push(walked[i])
+        end
+    end
+    sort.StableSortBy(plan, (a: Entry, b: Entry): ret str.Compare(a.path, b.path) < 0 end)
+    ret plan
+end
+
+@en "MergeScan"
+/// The new index for a scan: for each walked entry, the stored track from
+/// `prev` when path, size and mtimeNs all match (copied, so its ID is the same
+/// string), else the track in `fresh` with that path. A stored track whose
+/// path is not in `walked` is never copied, which is how a removed file leaves
+/// the index. `fresh` must hold a track for every entry ScanPlan returned; an
+/// entry with none is left out rather than invented. Tracks come back sorted by
+/// path. Pure.
+pub func MergeScan(prev: Index, walked: Vector<Entry>, fresh: Vector<Track>): Index:
+    mut idx := EmptyIndex()
+    repeat walked.len() in i:
+        if classify(prev, walked[i]) == 0:
+            idx.tracks.push(prev.tracks[findTrack(prev, walked[i].path)])
+            continue
+        end
+        repeat fresh.len() in j:
+            if fresh[j].path == walked[i].path:
+                idx.tracks.push(fresh[j])
+                break
+            end
+        end
+    end
+    byPath(idx.tracks)
+    ret idx
+end

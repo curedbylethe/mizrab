@@ -1,0 +1,142 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the rescan: ScanPlan and MergeScan on hand-built data, so no real
+// file or mtime is needed. Of four stored tracks (a, b, c, gone) and four
+// walked entries (a and b unchanged, d new, c with another size and mtime),
+// the plan is exactly c and d in path order. The merge keeps a and b as the
+// very same tracks, takes c and d from the fresh reads and drops gone.
+// Merging the result against the same walk plans nothing and writes the same
+// bytes.
+
+import encoding.json
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+func track(name: str, size: i64, mtime: i64): library.Track:
+    ret library.Track {
+        id = "id-" + name, path = "/m/" + name + ".flac", title = name, size = size, mtimeNs = mtime,
+        tagged = true, format = "flac",
+    }
+end
+
+func entry(name: str, size: i64, mtime: i64): library.Entry:
+    ret library.Entry { path = "/m/" + name + ".flac", size = size, mtimeNs = mtime }
+end
+
+func prevIndex(): library.Index:
+    mut idx := library.EmptyIndex()
+    idx.tracks.push(track("a", 10 as i64, 100 as i64))
+    idx.tracks.push(track("b", 20 as i64, 200 as i64))
+    idx.tracks.push(track("c", 30 as i64, 300 as i64))
+    idx.tracks.push(track("gone", 40 as i64, 400 as i64))
+    ret idx
+end
+
+// Deliberately not in path order.
+func walkedEntries(): Vector<library.Entry>:
+    mut w := Vector {} as Vector<library.Entry>
+    w.push(entry("a", 10 as i64, 100 as i64))
+    w.push(entry("d", 50 as i64, 500 as i64))
+    w.push(entry("b", 20 as i64, 200 as i64))
+    w.push(entry("c", 31 as i64, 301 as i64))
+    ret w
+end
+
+func freshTracks(plan: Vector<library.Entry>): Vector<library.Track>:
+    mut f := Vector {} as Vector<library.Track>
+    repeat plan.len() in i:
+        e := plan[i]
+        f.push(
+            library.Track {
+                id = library.TrackId(e.path), path = e.path, title = "fresh", size = e.size,
+                mtimeNs = e.mtimeNs, tagged = true, format = "flac",
+            }
+        )
+    end
+    ret f
+end
+
+func planTests:
+    prev := prevIndex()
+    plan := library.ScanPlan(prev, walkedEntries())
+    testing.AssertEqInt(plan.len(), 2)
+    testing.AssertEqStr(plan[0].path, "/m/c.flac")
+    testing.AssertEqInt64(plan[0].size, 31 as i64)
+    testing.AssertEqStr(plan[1].path, "/m/d.flac")
+
+    // Size alone, then mtime alone, is enough to plan a re-read.
+    mut one := Vector {} as Vector<library.Entry>
+    one.push(entry("a", 11 as i64, 100 as i64))
+    testing.AssertEqInt(library.ScanPlan(prev, one).len(), 1)
+    mut two := Vector {} as Vector<library.Entry>
+    two.push(entry("a", 10 as i64, 101 as i64))
+    testing.AssertEqInt(library.ScanPlan(prev, two).len(), 1)
+
+    // Nothing stored: everything is planned. Nothing walked: nothing is.
+    testing.AssertEqInt(library.ScanPlan(library.EmptyIndex(), walkedEntries()).len(), 4)
+    testing.AssertEqInt(library.ScanPlan(prev, Vector {} as Vector<library.Entry>).len(), 0)
+end
+
+func mergeTests:
+    prev := prevIndex()
+    walked := walkedEntries()
+    fresh := freshTracks(library.ScanPlan(prev, walked))
+    got := library.MergeScan(prev, walked, fresh)
+
+    testing.AssertEqInt(got.schema, library.SchemaVersion)
+    testing.AssertEqInt(got.tracks.len(), 4)
+    testing.AssertEqStr(got.tracks[0].path, "/m/a.flac")
+    testing.AssertEqStr(got.tracks[1].path, "/m/b.flac")
+    testing.AssertEqStr(got.tracks[2].path, "/m/c.flac")
+    testing.AssertEqStr(got.tracks[3].path, "/m/d.flac")
+
+    // Kept by copy: a and b are the stored tracks, id and title untouched.
+    testing.AssertEqStr(got.tracks[0].id, "id-a")
+    testing.AssertEqStr(got.tracks[0].title, "a")
+    testing.AssertEqStr(got.tracks[1].id, "id-b")
+    testing.AssertEqStr(got.tracks[1].title, "b")
+    // Changed c is the fresh read; new d is too, with the deterministic ID.
+    testing.AssertEqStr(got.tracks[2].title, "fresh")
+    testing.AssertEqInt64(got.tracks[2].size, 31 as i64)
+    testing.AssertEqStr(got.tracks[2].id, library.TrackId("/m/c.flac"))
+    testing.AssertEqStr(got.tracks[3].title, "fresh")
+    testing.AssertEqStr(got.tracks[3].id, library.TrackId("/m/d.flac"))
+    // The vanished path left no trace.
+    repeat got.tracks.len() in i:
+        testing.AssertFalse(got.tracks[i].path == "/m/gone.flac")
+    end
+
+    // An entry the plan asked for but nobody read is left out, not invented.
+    testing.AssertEqInt(library.MergeScan(prev, walked, Vector {} as Vector<library.Track>).tracks.len(), 2)
+    // Merge never touches its inputs: prev still has all four.
+    testing.AssertEqInt(prev.tracks.len(), 4)
+
+    // Rerun: same walk against the merged result plans nothing, and merging
+    // changes nothing, down to the bytes.
+    testing.AssertEqInt(library.ScanPlan(got, walked).len(), 0)
+    again := library.MergeScan(got, walked, Vector {} as Vector<library.Track>)
+    testing.AssertEqStr(json.MarshalIndent(again, "  "), json.MarshalIndent(got, "  "))
+    testing.AssertEqInt(again.tracks.len(), 4)
+end
+
+func main:
+    planTests()
+    mergeTests()
+    ret testing.Summary()
+end
