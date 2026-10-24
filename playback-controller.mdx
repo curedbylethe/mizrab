@@ -155,14 +155,15 @@ It needs `make build` first, because it links `build/miniaudio.o` and `build/ma_
 | Item | Value |
 | --- | --- |
 | Host | `Darwin arm64`, macOS 27.0.1 (build 26A434) |
+| Compiler | Salam 0.5.9 |
 | Backend | `Core Audio`, as printed |
 | Tick period | 5 ms |
 | Runs | 12 |
-| Minimum | 74 ms |
-| Median | 94.5 ms |
-| Maximum | 102 ms |
+| Minimum | 66 ms |
+| Median | 93 ms |
+| Maximum | 101 ms |
 
-The runs, in order, as `gap_ms`: 81, 83, 99, 102, 89, 90, 102, 74, 96, 99, 94, 95. Each run printed `backend=Core Audio` before its `gap_ms=` line. The spread is real: the number depends on the machine's scheduling and audio stack, so treat it as a range for this host, and re-run the command rather than quote a single value.
+The runs, in order, as `gap_ms`: 74, 92, 66, 90, 66, 94, 101, 100, 96, 77, 70, 96. Each run printed `backend=Core Audio` before its `gap_ms=` line. The spread is real: the number depends on the machine's scheduling and audio stack, so treat it as a range for this host, and re-run the command rather than quote a single value.
 
 ## Errors
 
