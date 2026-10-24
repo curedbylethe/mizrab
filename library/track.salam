@@ -1,0 +1,138 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// One track: what the index stores about an audio file, and how it is read.
+//
+// ReadTrack reads a bounded head of the file (ReadHead, never the whole file)
+// and parses ID3v2 and FLAC Vorbis comments with audio.tag, plus the FLAC
+// STREAMINFO block with audio.flac. A file with no usable tag is untagged:
+// tagged is false and the title is the filename stem, so a title is never
+// empty. Ogg files are not parsed yet and read as untagged.
+//
+// Fidelity: strings are stored as the bytes the file holds. Titles and paths
+// are never normalised, so invalid UTF-8 survives and collation is a
+// comparison-time concern. str.Len is a byte length, not a character count.
+//
+// Not stored on purpose: artwork, lyrics, comment, BPM and bitrate. The field
+// names below are the JSON keys, in this order.
+
+package library
+
+import audio.flac
+import audio.tag
+import crypto
+import filepath
+import mem
+import str
+
+@en "Track"
+/// One indexed audio file. id is TrackId(path). durationMs is filled for FLAC
+/// from STREAMINFO and is 0 for every other format, where 0 means unknown.
+/// tagged is false when no title, artist, album, year or track number parsed,
+/// and then title is the filename stem. format is the lowercase extension
+/// without the dot. size and mtimeNs come from the walk entry.
+pub struct Track:
+    pub id: str = ""
+    pub path: str = ""
+    pub title: str = ""
+    pub artist: str = ""
+    pub album: str = ""
+    pub albumArtist: str = ""
+    pub composer: str = ""
+    pub genre: str = ""
+    pub year: int = 0
+    pub track: int = 0
+    pub trackTotal: int = 0
+    pub disc: int = 0
+    pub durationMs: i64 = 0
+    pub size: i64 = 0
+    pub mtimeNs: i64 = 0
+    pub tagged: bool = false
+    pub format: str = ""
+end
+
+@en "TrackId"
+/// The stable ID of the file at `path`: the first 16 hex characters of the
+/// SHA-256 of its absolute path. It depends on the filesystem alone, so it
+/// survives deleting or corrupting the index. A rename or move gives a new ID.
+/// The same file reached through two root spellings (a symlinked root) gives
+/// two IDs, because the standard library cannot resolve symlinks.
+pub func TrackId(path: str): str:
+    abs := filepath.Abs(path)
+    hex := crypto.Sha256Hex(abs)
+    id := str.CharSubstr(hex, 0, 16)
+    mem.Free(hex as void*)
+    mem.Free(abs as void*)
+    ret id
+end
+
+@en "ReadTrack"
+/// Builds the Track for a walk entry. An unreadable or empty file is still a
+/// track: untagged, titled by its filename, duration 0.
+pub func ReadTrack(e: Entry): Track:
+    ext := filepath.Ext(e.path)
+    mut t := Track { id = TrackId(e.path), path = e.path, size = e.size, mtimeNs = e.mtimeNs }
+    if ext.len() > 1:
+        ext1 := str.Substr(ext, 1, ext.len() - 1)
+        t.format = ext1.lower()
+        mem.Free(ext1 as void*)
+    end
+    mem.Free(ext as void*)
+
+    buf := mem.Allocate(HeadCap as u64)
+    defer mem.Free(buf)
+    got := ReadHead(e.path, 0 as i64, HeadCap, buf)
+    if got > 0:
+        mut ok := false
+        mut tags := tag.ReadTags(buf, got, ok)
+        if ok and tag.HasTags(tags):
+            t.title = str.Clone(tags.title)
+            t.artist = str.Clone(tags.artist)
+            t.album = str.Clone(tags.album)
+            t.albumArtist = str.Clone(tags.albumartist)
+            t.composer = str.Clone(tags.composer)
+            t.genre = str.Clone(tags.genre)
+            t.year = tags.year
+            t.track = tags.track
+            t.trackTotal = tags.tracks
+            t.disc = tags.disc
+            t.tagged = true
+        end
+        tag.FreeTags(tags)
+
+        if t.format == "flac":
+            mut si := flac.StreamInfo {}
+            if flac.ReadStreamInfo(buf, got, si) and si.rate > 0:
+                t.durationMs = si.total * 1000 / (si.rate as i64)
+            end
+            flac.FreeStreamInfo(si)
+        end
+    end
+
+    // audio.tag keeps only digits of a date, so "2004-05-01" arrives as
+    // 20040501; drop digits until it is a four digit year.
+    until t.year > 9999:
+        t.year = t.year / 10
+    end
+
+    if t.tagged == false:
+        t.title = filepath.Stem(e.path)
+        // A dotfile like ".mp3" has an empty stem: fall back to the base name.
+        if t.title.len() == 0:
+            t.title = filepath.Base(e.path)
+        end
+    end
+    ret t
+end
