@@ -3,18 +3,20 @@
 mizrab is a music player built on basalam: a terminal application written in
 the [Salam](https://github.com/SalamLang/Salam) programming language.
 
-> **Status: audio engine and playback controller, no player yet.** The audio
-> engine exists: it decodes MP3, FLAC, WAV and OGG, streams them through a
-> lock-free ring buffer to miniaudio's playback callback, and runs headless on
-> miniaudio's null backend, where its tests exercise it
+> **Status: audio engine, playback controller and library scanner, no player
+> yet.** The audio engine exists: it decodes MP3, FLAC, WAV and OGG, streams
+> them through a lock-free ring buffer to miniaudio's playback callback, and
+> runs headless on miniaudio's null backend, where its tests exercise it
 > ([the engine](https://mizrab.mintlify.app/audio-engine)). The playback
 > controller above it exists too: states, commands, position, a queue and error
 > text, tested the same way
 > ([the controller](https://mizrab.mintlify.app/playback-controller)). The
-> binary uses neither yet: it answers `--version` and `--help` and prints its
-> usage when invoked bare. There is no playback command, no library scanning and
-> no user interface; the first playable build arrives when the command line
-> gains a play command.
+> binary uses neither yet. It does run the library scanner: `mizrab --scan
+> ROOT...` walks the roots, reads tags and writes a JSON index
+> ([the library](https://mizrab.mintlify.app/library)). Otherwise it answers
+> `--version` and `--help` and prints its usage when invoked bare. There is no
+> playback command and no user interface; the first playable build arrives when
+> the command line gains a play command.
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists. -->
@@ -56,9 +58,11 @@ make build
 make run
 ```
 
-At this commit `make run` prints the usage block; a bare `./build/mizrab`
-prints the same block and exits 0. `make build` also compiles the vendored
-miniaudio and the C glue first and links them into the binary.
+At this commit `make run` prints the usage block, which lists `--version`,
+`--scan`, `--index` and `--help`; a bare `./build/mizrab` prints the same block
+and exits 0. `./build/mizrab --scan ~/Music` scans a library and prints a
+one-line summary. `make build` also compiles the vendored miniaudio and the C
+glue first and links them into the binary.
 
 ## Build and run
 
@@ -79,19 +83,24 @@ including `make help` and the opt-in `make soak`.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
-The player binary currently imports only the Salam standard library (`flag`,
-`os`) plus its own `commands` package; the basalam import arrives with the
-application layer. The audio engine additionally uses `atomic`, `mem`, `sync`
-and `thread`, and is exercised by the tests, not by the binary. The `player`
-package is tested headlessly and is not yet included by the binary.
+The player binary currently imports the Salam standard library (`conv`, `flag`,
+`os`) plus its own `commands` and `library` packages, and links the third C
+object, `build/library_shim.o`; the basalam import arrives with the application
+layer. The `library` package additionally uses the `audio.tag` and `audio.flac`
+readers pinned in `salam.toml`, plus the standard library's JSON, crypto and
+filesystem packages. The audio engine uses
+`atomic`, `mem`, `sync` and `thread`, and is exercised by the tests, not by the
+binary. The `player` package is tested headlessly and is not yet included by
+the binary.
 
 ## Repository layout
 
 `main.salam` is the entry point, `commands/` the command layer, `audio/` the
 vendored miniaudio and stb_vorbis plus the decode/ring/device engine, `player/`
-the playback controller, and `tests/` the harness and its audio fixtures.
+the playback controller, `library/` the scanner, tag readers and index, and
+`tests/` the harness and its audio fixtures.
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
-every directory, including the reserved application-layer packages.
+every directory, including the reserved `config/` and `ui/` packages.
 
 ## Licence
 

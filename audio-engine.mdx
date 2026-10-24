@@ -13,7 +13,7 @@ keywords:
 
 The audio engine is the decode, ring and device layer that turns an audio file into frames for a playback device. It lives in `audio/` as the Salam package `audio` (the package is every `audio/*.salam` file merged; `audio/audio.salam` adds the public verbs and `Status`) on top of the vendored miniaudio and stb_vorbis C sources. A decoder thread fills a lock-free ring buffer; miniaudio's audio thread drains it through an exported Salam callback. This page is the engine's record: what it supports, what Salam's atomics can and cannot do, every boundary policy, the status interface and what the soak run did and did not show. It builds on [the miniaudio spike](/spike-miniaudio), whose findings still stand.
 
-The engine is tested headlessly on miniaudio's null backend. No playback command exists yet: `main.salam` still answers only `--version` and `--help`, and nothing in the binary calls the engine.
+The engine is tested headlessly on miniaudio's null backend. No playback command exists yet: `main.salam` answers `--version`, `--help` and the library scan (`--scan`, `--index`), and nothing in the binary calls the engine.
 
 ## Decoder support
 
