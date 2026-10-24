@@ -32,8 +32,12 @@ jobs:
         id: pin
         run: echo "version=$(cat .salam-version)" >> "$GITHUB_OUTPUT"
 
+      # The action is pinned to a commit, not @main: a change upstream can alter
+      # the install path, cache key or asset naming without a change here, and
+      # .salam-version only pins which release gets downloaded afterwards.
+      # SalamLang/Salam, resolved 2026-10-24. Bump it in its own commit.
       - name: Setup Salam
-        uses: SalamLang/Salam/.github/actions/setup-salam@main
+        uses: SalamLang/Salam/.github/actions/setup-salam@3df9218249ba6ed8dfd1f8a6740acdc6d5317574
         with:
           version: ${{ steps.pin.outputs.version }}
 
