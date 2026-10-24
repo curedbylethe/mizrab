@@ -1,0 +1,150 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the index file: a save/load round trip that keeps every field of two
+// tracks, byte-identical output for the same tracks in any order, creation of
+// a missing parent directory, and the rejections that must all fall back to an
+// empty index with the current schema: truncated text, another schema, wrong
+// type, unknown key, junk, an empty file and a missing file.
+
+import io
+import os
+import str
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+dir := "../build/tests/index-test"
+
+func track(n: int): library.Track:
+    ret library.Track {
+        id = "00000000000000a" + str.FromInt(n), path = "/music/t" + str.FromInt(n) + ".flac",
+        title = "T\u014dne " + str.FromInt(n), artist = "Artist", album = "Album", albumArtist = "Various",
+        composer = "Composer", genre = "Genre", year = 2004, track = n, trackTotal = 12, disc = 1,
+        durationMs = 1500 as i64 + n as i64, size = 25325 as i64, mtimeNs = 1700000000123456789 as i64 + n as i64,
+        tagged = true, format = "flac",
+    }
+end
+
+func two(): library.Index:
+    mut idx := library.EmptyIndex()
+    idx.tracks.push(track(2))
+    idx.tracks.push(track(1))
+    ret idx
+end
+
+func sameTrack(a: library.Track, b: library.Track):
+    testing.AssertEqStr(a.id, b.id)
+    testing.AssertEqStr(a.path, b.path)
+    testing.AssertEqStr(a.title, b.title)
+    testing.AssertEqStr(a.artist, b.artist)
+    testing.AssertEqStr(a.album, b.album)
+    testing.AssertEqStr(a.albumArtist, b.albumArtist)
+    testing.AssertEqStr(a.composer, b.composer)
+    testing.AssertEqStr(a.genre, b.genre)
+    testing.AssertEqInt(a.year, b.year)
+    testing.AssertEqInt(a.track, b.track)
+    testing.AssertEqInt(a.trackTotal, b.trackTotal)
+    testing.AssertEqInt(a.disc, b.disc)
+    testing.AssertEqInt64(a.durationMs, b.durationMs)
+    testing.AssertEqInt64(a.size, b.size)
+    testing.AssertEqInt64(a.mtimeNs, b.mtimeNs)
+    testing.AssertEqBool(a.tagged, b.tagged)
+    testing.AssertEqStr(a.format, b.format)
+end
+
+// Writes `text` to a file under dir and loads it as an index.
+func loadText(name: str, text: str): library.Index:
+    path := dir + "/" + name
+    io.WriteFile(path, text)
+    idx := library.LoadIndex(path)
+    os.Remove(path)
+    ret idx
+end
+
+func assertEmpty(idx: library.Index):
+    testing.AssertEqInt(idx.schema, library.SchemaVersion)
+    testing.AssertEqInt(idx.tracks.len(), 0)
+end
+
+func roundTripTests:
+    path := dir + "/nested/a/index.json"
+    testing.AssertFalse(os.Exists(dir + "/nested"))
+    testing.AssertEqInt(library.SaveIndex(path, two()), 0)
+    testing.AssertTrue(os.Exists(path))
+    testing.AssertFalse(os.Exists(path + ".tmp"))
+
+    got := library.LoadIndex(path)
+    testing.AssertEqInt(got.schema, library.SchemaVersion)
+    testing.AssertEqInt(got.tracks.len(), 2)
+    // Saved and loaded sorted by path, though pushed 2 then 1.
+    sameTrack(got.tracks[0], track(1))
+    sameTrack(got.tracks[1], track(2))
+
+    text := io.ReadFile(path)
+    testing.AssertTrue(str.StartsWith(text, "{\n  \"schema\": 1,\n  \"tracks\": ["))
+    testing.AssertTrue(str.EndsWith(text, "}\n"))
+    testing.AssertTrue(str.Contains(text, "\"albumArtist\": \"Various\""))
+
+    // The same tracks in the other order, and a second save over the first,
+    // write the same bytes.
+    mut rev := library.EmptyIndex()
+    rev.tracks.push(track(1))
+    rev.tracks.push(track(2))
+    other := dir + "/rev.json"
+    testing.AssertEqInt(library.SaveIndex(other, rev), 0)
+    testing.AssertEqStr(io.ReadFile(other), text)
+    testing.AssertEqInt(library.SaveIndex(path, got), 0)
+    testing.AssertEqStr(io.ReadFile(path), text)
+
+    // A stale temp file does not survive a save.
+    io.WriteFile(path + ".tmp", "stale")
+    testing.AssertEqInt(library.SaveIndex(path, got), 0)
+    testing.AssertFalse(os.Exists(path + ".tmp"))
+    testing.AssertEqStr(io.ReadFile(path), text)
+
+    // Truncated at half its length: the size on disk disagrees with nothing,
+    // so only a strict decode can reject it.
+    half := str.Substr(text, 0, text.len() / 2)
+    assertEmpty(loadText("half.json", half))
+    os.Remove(path)
+    os.Remove(other)
+end
+
+func rejectTests:
+    assertEmpty(library.LoadIndex(dir + "/missing.json"))
+    assertEmpty(loadText("empty.json", ""))
+    assertEmpty(loadText("junk.json", "not json at all"))
+    assertEmpty(loadText("schema.json", "{\"schema\": 999, \"tracks\": []}"))
+    assertEmpty(loadText("future.json", "{\"schema\": 999, \"other\": [1, 2]}"))
+    assertEmpty(loadText("noschema.json", "{\"tracks\": []}"))
+    assertEmpty(loadText("type.json", "{\"schema\": 1, \"tracks\": 5}"))
+    assertEmpty(loadText("unknown.json", "{\"schema\": 1, \"tracks\": [], \"extra\": 1}"))
+    assertEmpty(loadText("bare.json", "{\"schema\": 1}"))
+    assertEmpty(loadText("trail.json", "{\"schema\": 1, \"tracks\": []} x"))
+    // A valid, empty library is a legitimate state, not a rejection.
+    assertEmpty(loadText("valid.json", "{\"schema\": 1, \"tracks\": []}"))
+end
+
+func main:
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    roundTripTests()
+    rejectTests()
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end

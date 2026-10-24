@@ -1,0 +1,119 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The index: a versioned JSON file holding every Track, saved atomically and
+// loaded defensively. The index is a cache of filesystem state, so every doubt
+// about a file on disk is answered the same way: an empty index, then a rescan.
+//
+// JSON keys are the struct field names verbatim, in declaration order (Salam has
+// no tags), so Track and Index are a published format. Reordering or renaming a
+// field needs a SchemaVersion bump. There is one version and no migration: a
+// file of another schema is discarded.
+//
+// Determinism: no timestamps, tracks sorted by path, so saving the same tracks
+// twice writes the same bytes.
+
+package library
+
+import encoding.encerr
+import encoding.json
+import filepath
+import fs.file
+import io
+import os
+import sort
+import str
+
+@en "SchemaVersion"
+/// The schema number a saved index carries and a loaded one must match.
+pub const SchemaVersion := 1
+
+@en "Index"
+/// Every indexed track. schema is first on disk and is the only thing a reader
+/// checks before trusting the rest.
+pub struct Index:
+    pub schema: int = SchemaVersion
+    pub tracks: Vector<Track>
+end
+
+@en "SchemaProbe"
+/// Reads the schema number out of a file whose other keys may be unknown, so a
+/// future schema can be recognised and discarded instead of failing to decode.
+pub struct SchemaProbe:
+    pub schema: int = 0
+end
+
+func byPath(v: Vector<Track>):
+    sort.StableSortBy(v, (a: Track, b: Track): ret str.Compare(a.path, b.path) < 0 end)
+end
+
+@en "EmptyIndex"
+/// A valid index with the current schema and no tracks.
+pub func EmptyIndex(): Index:
+    ret Index { tracks = Vector {} as Vector<Track> }
+end
+
+@en "LoadIndex"
+/// Loads the index at `path`; never fails. Returns EmptyIndex() when the file
+/// is absent, cannot be read, is shorter or longer than its size on disk
+/// (truncated), declares a schema other than SchemaVersion, or does not decode
+/// strictly (unknown key, missing field, wrong type, trailing data). A failed
+/// decode may leave its target half filled, so that struct is never returned.
+/// Tracks come back sorted by path.
+pub func LoadIndex(path: str): Index:
+    if os.Exists(path) == false:
+        ret EmptyIndex()
+    end
+    text := io.ReadFile(path)
+    if (text.len() as i64) != os.FileSize(path):
+        ret EmptyIndex()
+    end
+    mut err := encerr.EncodingError {}
+    mut probe := SchemaProbe {}
+    if json.UnmarshalLenient(text, probe, err) == false or probe.schema != SchemaVersion:
+        ret EmptyIndex()
+    end
+    mut idx := EmptyIndex()
+    if json.Unmarshal(text, idx, err) == false:
+        ret EmptyIndex()
+    end
+    byPath(idx.tracks)
+    ret idx
+end
+
+@en "SaveIndex"
+/// Writes `idx` to `path`, creating missing parent directories; returns 0 on
+/// success and -1 on failure. Sorts idx.tracks by path in place first, so the
+/// file is normalised however the vector arrived. The write goes to
+/// path + ".tmp" and is renamed over `path`: atomic against a crash of this
+/// process, never a half written index. There is no fsync (Salam has none), so
+/// a power loss right after the rename can still lose the new file; that costs
+/// a rescan, not data. A stale ".tmp" from a failed earlier save is removed
+/// first, and one left by a failure now is removed at the next save.
+pub func SaveIndex(path: str, idx: Index): int:
+    if os.MkdirAll(filepath.Dir(path)) != 0:
+        ret 0 - 1
+    end
+    tmp := path.concat(".tmp")
+    if os.Exists(tmp):
+        os.Remove(tmp)
+    end
+    byPath(idx.tracks)
+    data := json.MarshalIndent(idx, "  ").concat("\n")
+    if file.AtomicWrite(path, data) != 0:
+        ret 0 - 1
+    end
+    ret 0
+end
