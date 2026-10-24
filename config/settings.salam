@@ -123,6 +123,10 @@ pub func Parse(text: str, problem &: LoadError): Settings:
                     end
                     out.indexPath = val
                 else full == "library.roots":
+                    // Collected here and assigned after the entries, so a second
+                    // roots line replaces the first and an empty entry still
+                    // returns before anything is assigned.
+                    mut list := Vector {} as Vector<str>
                     parts := str.Split(val, ",")
                     repeat parts.len() in j:
                         part := str.Trim(parts[j])
@@ -132,8 +136,9 @@ pub func Parse(text: str, problem &: LoadError): Settings:
                             }
                             ret Settings {}
                         end
-                        out.roots.push(part)
+                        list.push(part)
                     end
+                    out.roots = list
                 else:
                     problem = LoadError { line = n, text = "unknown key '" + full + "' in [" + section + "]" }
                     ret Settings {}
