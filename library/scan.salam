@@ -22,8 +22,23 @@
 
 package library
 
+import filepath
+import os
+import os.user
 import sort
 import str
+
+@en "ScanCount"
+/// What a scan did, for the caller to report. total is the number of tracks in
+/// the saved index; added and updated are files read this scan (new, and
+/// changed by size or mtime); removed is the stored tracks whose file is gone.
+/// All zero when Scan returns -1.
+pub struct ScanCount:
+    pub total: int = 0
+    pub added: int = 0
+    pub updated: int = 0
+    pub removed: int = 0
+end
 
 // Where `path` sits in prev.tracks, or -1.
 // shortcut: linear scan, O(tracks) per lookup; the index is sorted by path so a
@@ -90,4 +105,76 @@ pub func MergeScan(prev: Index, walked: Vector<Entry>, fresh: Vector<Track>): In
     end
     byPath(idx.tracks)
     ret idx
+end
+
+@en "DefaultIndexPath"
+/// Where the index lives when the caller names none: $XDG_DATA_HOME/mizrab/index.json,
+/// or ~/.local/share/mizrab/index.json when that is unset or empty. The data
+/// directory, not the cache directory: the index can be rebuilt, but playlists
+/// refer to its track IDs and a cache cleaner deleting it would be a worse
+/// surprise than an unusual location. Pass an explicit path to use the cache
+/// directory instead. Reads the environment only; touches no file.
+pub func DefaultIndexPath(): str:
+    mut base := os.Env("XDG_DATA_HOME")
+    if base == "":
+        base = user.HomeDir().concat("/.local/share")
+    end
+    ret filepath.Join(base, "mizrab/index.json")
+end
+
+@en "Scan"
+/// Walks every root, reads the tags of new and changed files only, and saves
+/// the merged index at `indexPath`. Returns 0 on success and -1 when nothing
+/// was written: no roots, a root that is not a directory (a symlink to one is
+/// fine), or a failed save. Every root is checked before the index file is
+/// even read, so an unmounted drive or a typo can never prune the index: it
+/// stays byte for byte as it was. Roots that overlap list a file once, by path.
+/// `count` is filled on success and zeroed on -1. Prints nothing.
+pub func Scan(roots: Vector<str>, indexPath: str, count &: ScanCount): int:
+    count = ScanCount {}
+    if roots.len() == 0:
+        ret 0 - 1
+    end
+    repeat roots.len() in i:
+        if os.IsDir(roots[i]) == false:
+            ret 0 - 1
+        end
+    end
+
+    mut walked := Vector {} as Vector<Entry>
+    repeat roots.len() in i:
+        found := Walk(roots[i])
+        repeat found.len() in j:
+            walked.push(found[j])
+        end
+    end
+    sort.StableSortBy(walked, (a: Entry, b: Entry): ret str.Compare(a.path, b.path) < 0 end)
+    mut uniq := Vector {} as Vector<Entry>
+    repeat walked.len() in i:
+        if i == 0 or walked[i].path != walked[i - 1].path:
+            uniq.push(walked[i])
+        end
+    end
+
+    prev := LoadIndex(indexPath)
+    plan := ScanPlan(prev, uniq)
+    mut fresh := Vector {} as Vector<Track>
+    mut added := 0
+    repeat plan.len() in i:
+        if classify(prev, plan[i]) == 1:
+            added = added + 1
+        end
+        fresh.push(ReadTrack(plan[i]))
+    end
+    idx := MergeScan(prev, uniq, fresh)
+    if SaveIndex(indexPath, idx) != 0:
+        ret 0 - 1
+    end
+    count.total = idx.tracks.len()
+    count.added = added
+    count.updated = plan.len() - added
+    // Every stored track with a walked file is either kept or updated, and the
+    // rest are gone: kept = total - added, so removed = stored - kept.
+    count.removed = prev.tracks.len() - (idx.tracks.len() - added)
+    ret 0
 end

@@ -22,11 +22,18 @@
 // bytes.
 
 import encoding.json
+import filepath
+import io
+import os
+import str
 import testing
 
 include "../library/library.salam"
 
 link static "../build/library_shim.o"
+
+// Where the real-file tests work: inside build/, never $HOME.
+dir := "../build/tests/rescan"
 
 func track(name: str, size: i64, mtime: i64): library.Track:
     ret library.Track {
@@ -135,8 +142,120 @@ func mergeTests:
     testing.AssertEqInt(again.tracks.len(), 4)
 end
 
+func scan(roots: Vector<str>, index: str, count &: library.ScanCount): int:
+    ret library.Scan(roots, index, count)
+end
+
+func counts(c: library.ScanCount, total: int, added: int, updated: int, removed: int):
+    testing.AssertEqInt(c.total, total)
+    testing.AssertEqInt(c.added, added)
+    testing.AssertEqInt(c.updated, updated)
+    testing.AssertEqInt(c.removed, removed)
+end
+
+func idOf(idx: library.Index, path: str): str:
+    repeat idx.tracks.len() in i:
+        if idx.tracks[i].path == path:
+            ret idx.tracks[i].id
+        end
+    end
+    ret ""
+end
+
+// A root that is missing, or no root at all, must leave an existing index
+// exactly as it was, even when another root is fine.
+func guardTests:
+    index := dir + "/guard.json"
+    keep := "{\"keep\": \"me\"}"
+    io.WriteFile(index, keep)
+    mut c := library.ScanCount { total = 9, added = 9, updated = 9, removed = 9 }
+
+    mut roots := Vector {} as Vector<str>
+    testing.AssertEqInt(scan(roots, index, c), 0 - 1)
+    counts(c, 0, 0, 0, 0)
+    roots.push(dir)
+    roots.push(dir + "/missing")
+    testing.AssertEqInt(scan(roots, index, c), 0 - 1)
+    counts(c, 0, 0, 0, 0)
+    testing.AssertEqStr(io.ReadFile(index), keep)
+    testing.AssertFalse(os.Exists(index + ".tmp"))
+
+    // A file is not a root either.
+    mut file := Vector {} as Vector<str>
+    file.push(index)
+    testing.AssertEqInt(scan(file, index, c), 0 - 1)
+    testing.AssertEqStr(io.ReadFile(index), keep)
+    os.Remove(index)
+end
+
+// Three rescans of a real tree: first read, untouched, then one file changed
+// in size, one removed and one added.
+func rescanTests:
+    tree := dir + "/tree"
+    index := dir + "/out/index.json"
+    os.MkdirAll(tree + "/sub")
+    io.WriteFile(tree + "/a.mp3", "aaa")
+    io.WriteFile(tree + "/b.flac", "bbb")
+    io.WriteFile(tree + "/c.ogg", "ccc")
+    mut roots := Vector {} as Vector<str>
+    roots.push(tree)
+    mut c := library.ScanCount {}
+
+    testing.AssertEqInt(scan(roots, index, c), 0)
+    counts(c, 3, 3, 0, 0)
+    first := library.LoadIndex(index)
+    testing.AssertEqInt(first.tracks.len(), 3)
+    base := filepath.Abs(tree)
+    a := base + "/a.mp3"
+    b := base + "/b.flac"
+    testing.AssertEqStr(first.tracks[0].path, a)
+    testing.AssertEqStr(first.tracks[0].id, library.TrackId(a))
+    firstText := io.ReadFile(index)
+
+    // Untouched: nothing is read, and the file is byte for byte the same.
+    testing.AssertEqInt(scan(roots, index, c), 0)
+    counts(c, 3, 0, 0, 0)
+    testing.AssertEqStr(io.ReadFile(index), firstText)
+
+    io.WriteFile(tree + "/b.flac", "bbbbbb")
+    os.Remove(tree + "/c.ogg")
+    io.WriteFile(tree + "/sub/d.wav", "ddd")
+    testing.AssertEqInt(scan(roots, index, c), 0)
+    counts(c, 3, 1, 1, 1)
+    second := library.LoadIndex(index)
+    testing.AssertEqInt(second.tracks.len(), 3)
+    testing.AssertEqStr(idOf(second, a), idOf(first, a))
+    testing.AssertEqStr(idOf(second, b), idOf(first, b))
+    testing.AssertEqStr(idOf(second, base + "/c.ogg"), "")
+    testing.AssertEqStr(idOf(second, base + "/sub/d.wav"), library.TrackId(base + "/sub/d.wav"))
+    testing.AssertEqInt64(second.tracks[1].size, 6 as i64)
+
+    // Overlapping roots list each file once.
+    roots.push(tree + "/sub")
+    testing.AssertEqInt(scan(roots, index, c), 0)
+    counts(c, 3, 0, 0, 0)
+
+    // A corrupt index is a lost cache: everything is read again.
+    io.WriteFile(index, "not json")
+    testing.AssertEqInt(scan(roots, index, c), 0)
+    counts(c, 3, 3, 0, 0)
+    os.RemoveAll(dir + "/out")
+end
+
+func defaultTests:
+    p := library.DefaultIndexPath()
+    testing.AssertTrue(p.len() > 0)
+    testing.AssertTrue(str.EndsWith(p, "/mizrab/index.json"))
+end
+
 func main:
     planTests()
     mergeTests()
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    guardTests()
+    rescanTests()
+    defaultTests()
+    os.RemoveAll(dir)
     ret testing.Summary()
 end
