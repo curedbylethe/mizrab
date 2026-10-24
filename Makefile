@@ -5,7 +5,10 @@ CC ?= cc
 BUILD := build
 BIN := $(BUILD)/mizrab
 ENTRY := main.salam
-SOURCES := main.salam commands audio player
+# Every Salam source in the tree, derived rather than listed, so a new file or
+# a new directory cannot sit outside fmt-check. `git ls-files` stops at the
+# vendor/basalam submodule and skips build output and ignored files.
+SOURCES := $(shell git ls-files --cached --others --exclude-standard '*.salam')
 FLAGS := --log-level=warn --backend=llvm
 SALAM_VERSION := $(shell cat .salam-version)
 MINT ?= mint
@@ -52,9 +55,11 @@ test: build
 	sh tests/run.sh
 
 fmt:
+	@test -n "$(SOURCES)" || { echo "make fmt: no .salam sources found; run it in a git checkout" >&2; exit 1; }
 	$(SALAM) format $(SOURCES)
 
 fmt-check:
+	@test -n "$(SOURCES)" || { echo "make fmt-check: no .salam sources found; run it in a git checkout" >&2; exit 1; }
 	$(SALAM) format --check $(SOURCES)
 
 # The tree-green gate as one word: fmt-check first so a formatting failure is
