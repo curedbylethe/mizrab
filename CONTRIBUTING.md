@@ -6,7 +6,7 @@ covers setup, the pins, the conventions and how to report an upstream defect.
 
 ## Set up
 
-1. Install the Salam compiler, version **0.5.6** (`salam version` to check).
+1. Install the Salam compiler, version **0.5.9** (`salam version` to check).
    See the [Salam repository](https://github.com/SalamLang/Salam) for how to
    build or install it.
 2. Clone with the submodule, then build and test:
