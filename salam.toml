@@ -4,6 +4,6 @@ version = "0.0.1"
 salam = ">=0.5.9"
 
 [dependencies]
-"github.com/curedbylethe/basalam" = "v0.3.1"
+"github.com/curedbylethe/basalam" = "v0.3.2"
 "audio.flac" = "v0.5.9"
 "audio.tag" = "v0.5.9"
