@@ -31,6 +31,7 @@ func main:
     flag.AddBool(f, "version", "v", false, "print the version and exit")
     flag.AddBool(f, "scan", "", false, "scan the library roots given as arguments and write the index")
     flag.AddStr(f, "index", "", "", "index file to read and write (default: <data>/mizrab/index.json)")
+    flag.AddStr(f, "config", "", "", "config file to read (default: <config>/mizrab/config.ini)")
     if not flag.Parse(f, os.Args()):
         println "mizrab:", flag.Error(f)
         ret 2
@@ -43,33 +44,60 @@ func main:
         println "mizrab " + commands.Version
         ret 0
     end
+    // The file is read after --help and --version, so a broken config cannot
+    // make either of them fail. A missing default file is not an error; a
+    // missing --config is, because the caller named it.
+    paths := config.FromEnv()
+    mut cfgPath := flag.GetStr(f, "config")
+    explicit := flag.WasSet(f, "config")
+    if cfgPath == "":
+        cfgPath = config.ConfigFile(paths)
+    end
+    mut file := config.Settings {}
+    if cfgPath != "":
+        if os.Exists(cfgPath):
+            mut e := config.LoadError {}
+            file = config.LoadFile(cfgPath, e)
+            if e.text != "":
+                println "mizrab: " + config.Describe(cfgPath, e)
+                ret 2
+            end
+        else explicit:
+            println "mizrab: cannot read " + cfgPath
+            ret 2
+        end
+    end
     if flag.GetBool(f, "scan"):
         // Parse was handed os.Args(), so the program name is positional 0;
         // skip it only when it is there, so a caller passing a bare argument
         // list does not lose the first root.
         args := flag.Positional(f)
-        mut roots := Vector {} as Vector<str>
+        mut cli := config.Settings {}
         mut first := 0
         if args.len() > 0 and args[0] == os.Args()[0]:
             first = 1
         end
         repeat args.len() - first in i:
-            roots.push(args[i + first])
+            cli.roots.push(args[i + first])
         end
-        if roots.len() == 0:
+        cli.indexPath = flag.GetStr(f, "index")
+        // Positional roots sit at the CLI level, so they beat the file's roots,
+        // and --index beats the file's library.index.
+        st := config.Resolve(config.Defaults(), file, cli)
+        if st.roots.len() == 0:
             println "mizrab: --scan needs at least one root"
             ret 2
         end
-        mut indexPath := flag.GetStr(f, "index")
+        mut indexPath := st.indexPath
         if indexPath == "":
-            indexPath = config.IndexFile(config.FromEnv())
+            indexPath = config.IndexFile(paths)
             if indexPath == "":
                 println "mizrab: cannot find a data directory; pass --index"
                 ret 2
             end
         end
         mut count := library.ScanCount {}
-        if library.Scan(roots, indexPath, count) != 0:
+        if library.Scan(st.roots, indexPath, count) != 0:
             println "mizrab: scan failed: " + indexPath
             ret 1
         end
