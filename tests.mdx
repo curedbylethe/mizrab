@@ -40,18 +40,29 @@ The harness needs `build/mizrab` and stops if it is missing, which is why `make 
 | `state_test` | the [playback controller](/playback-controller)'s transition table: all 63 state and command pairs, the names and the error text |
 | `player_test` | the controller's commands on the null backend: rejected transitions, failure classification, position and duration, pause and resume, volume, the seek bound and the end of a track |
 | `queue_test` | the controller's queue: order and bounds, repeat modes, shuffle determinism, the end-of-track advance and the gap measured with a fake clock |
+| `library_shim_test` | the [library](/library) C shim: `lstat` on a file, a directory, a symlink and a missing path, and the binary-safe head read, checked against a hand-decoded FLAC STREAMINFO block |
+| `walk_test` | the library walk: the fixtures in sorted order, with the symlink and the non-audio file left out; dot-names, letter case, a symlinked directory and the 32-level depth limit on a tree built at run time |
+| `tags_test` | `ReadTrack`: the tagged MP3 and FLAC fixtures, an artist-only tag keeping a filename title, the untagged fallback, FLAC duration, the track ID and a JSON round trip |
+| `ogg_test` | the Ogg Vorbis comment reader: a re-muxed file, a comment packet split across pages, an oversize packet and input that is not a whole comment packet |
+| `index_test` | the index file: a save and load round trip, byte-identical output, and every rejection that falls back to an empty index |
+| `rescan_test` | `ScanPlan` and `MergeScan` on hand-built data, then `Scan` on real files: what is re-read, what is kept, what drops out |
+| `unicode_test` | the measured Unicode record: byte, codepoint, grapheme and `term.Width` numbers for a fixed corpus, and how titles sort |
 
-`decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
+`decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The library tests link `build/library_shim.o`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
 
 `tests/gap.sh` is not a test either, and `run.sh` does not discover it. It is run by hand, after `make build`, to record the inter-track gap on the real audio backend; see [the playback controller](/playback-controller#the-inter-track-gap).
 
 ## The binary smoke checks
 
-After the test programs, three checks run against the real binary rather than a test program. They run on every invocation, including a single named test:
+After the test programs, eight checks run against the real binary rather than a test program. They run on every invocation, including a single named test:
 
 - `--version` exits 0 and prints the pinned version;
 - `--help` exits 0 and prints the usage line;
-- an unknown flag is a usage error, exit 2.
+- an unknown flag is a usage error, exit 2;
+- `--scan` writes an index and prints the summary line;
+- a second `--scan` of the same root reads nothing and writes the same bytes;
+- the index carries the schema number;
+- a missing root exits 1 and a missing root argument exits 2.
 
 They count towards the failure total only; the `N passed, M failed` summary counts test programs.
 
@@ -62,7 +73,7 @@ make build
 sh tests/run.sh cli_test
 ```
 
-With no names, the harness runs every `tests/*_test.salam`. A name narrows the golden checks; the three smoke checks still run.
+With no names, the harness runs every `tests/*_test.salam`. A name narrows the golden checks; the eight smoke checks still run.
 
 ## Add a test
 
