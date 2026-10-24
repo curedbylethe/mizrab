@@ -25,7 +25,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test fmt fmt-check clean docs docs-check docs-format-check soak
+.PHONY: help build run test check fmt fmt-check clean docs docs-check docs-format-check soak
 
 help:
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
@@ -33,6 +33,7 @@ help:
 	@echo "make test      build and run tests/*_test.salam plus the CLI smoke checks"
 	@echo "make fmt       format all Salam sources in place"
 	@echo "make fmt-check fail if any Salam source would be rewritten"
+	@echo "make check     run fmt-check, build and test in order: the tree-green gate"
 	@echo "make clean     remove build output"
 	@echo "make docs      serve the site locally with mint $(MINT_VERSION) (pinned in .mint-version)"
 	@echo "make docs-check validate docs.json and check internal links and anchors"
@@ -55,6 +56,12 @@ fmt:
 
 fmt-check:
 	$(SALAM) format --check $(SOURCES)
+
+# The tree-green gate as one word: fmt-check first so a formatting failure is
+# reported before the compile, then test (which depends on build).
+check:
+	$(MAKE) fmt-check
+	$(MAKE) test
 
 docs:
 	$(MINT) dev

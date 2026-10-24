@@ -13,6 +13,14 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 
 `SALAM=/path/to/salam` overrides the compiler for every target that invokes it, if your Salam build is not on `PATH`; see [install and build](/install).
 
+## Gate
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make check` | `make fmt-check`, then `make test` (which runs `make build`) | the tree-green gate: formatting, then build and test |
+
+`make check` is the one command every contributor and CI job runs; the three targets it calls are below, for when one step fails. CI's `check` job calls it on Ubuntu and macOS.
+
 ## Build and run
 
 | Target | Runs | Purpose |
