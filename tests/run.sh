@@ -248,6 +248,30 @@ else
     echo "ok   cli: config roots"
 fi
 
+# The flags beat the file: the positional root and --index both override what
+# the config sets, so the config's index is never written even though its root
+# does not exist. This is the wiring `Resolve` alone cannot prove.
+rm -f "$OUT/prec-file.json" "$OUT/prec-flag.json"
+printf '[library]\nroots = %s/does-not-exist\nindex = %s/prec-file.json\n' "$OUT" "$OUT" > "$OUT/prec-config.ini"
+"$BIN" --config "$OUT/prec-config.ini" --scan fixtures --index "$OUT/prec-flag.json" > "$OUT/cli-config-precedence.stdout" 2>&1
+code=$?
+rm -f "$OUT/prec-config.ini"
+if [ "$code" -ne 0 ]; then
+    echo "FAIL cli: config precedence (exit $code)"
+    fail=$((fail + 1))
+elif ! grep -q "^mizrab: scanned " "$OUT/cli-config-precedence.stdout"; then
+    echo "FAIL cli: config precedence (no summary line)"
+    fail=$((fail + 1))
+elif [ ! -f "$OUT/prec-flag.json" ]; then
+    echo "FAIL cli: config precedence (flag index not written)"
+    fail=$((fail + 1))
+elif [ -f "$OUT/prec-file.json" ]; then
+    echo "FAIL cli: config precedence (config index written)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: config precedence"
+fi
+
 # An explicitly named config that is not there is an error, not a silent fall
 # back to the defaults.
 "$BIN" --config "$OUT/there-is-no.ini" --scan fixtures > "$OUT/cli-config-missing.stdout" 2>&1
