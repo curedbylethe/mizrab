@@ -1,0 +1,70 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the walk: the committed fixtures (sorted, sized, absolute, with the
+// non-audio file and the symlink left out), then a tree built at run time
+// under build/ for the rules the fixtures cannot show: dot-names are pruned in
+// both files and directories, and the extension match ignores letter case. A
+// root that does not exist yields nothing.
+
+import filepath
+import os
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+// Where the runtime tree lives. The harness runs from tests/, so this resolves
+// inside build/ and never touches the source tree.
+tree := "../build/tests/walktree"
+
+func fixtureTests:
+    base := filepath.Abs("fixtures")
+    got := library.Walk("fixtures")
+    testing.AssertEqInt(got.len(), 4)
+
+    names := ["tone.flac", "tone.mp3", "tone.ogg", "tone.wav"]
+    sizes := [25237 as i64, 11075 as i64, 5422 as i64, 24044 as i64]
+    repeat 4 in i:
+        e := got.get(i)
+        testing.AssertEqStr(e.path, base.concat("/").concat(names[i]))
+        testing.AssertEqInt64(e.size, sizes[i])
+        testing.AssertTrue(e.mtimeNs > 0)
+        testing.AssertTrue(filepath.IsAbs(e.path))
+    end
+end
+
+func treeTests:
+    os.RemoveAll(tree)
+    os.MkdirAll(tree.concat("/.cache"))
+    os.WriteFile(tree.concat("/.cache/inside.mp3"), "abc")
+    os.WriteFile(tree.concat("/.HIDDEN.mp3"), "abc")
+    os.WriteFile(tree.concat("/UPPER.FLAC"), "abc")
+
+    got := library.Walk(tree)
+    testing.AssertEqInt(got.len(), 1)
+    testing.AssertEqStr(got.get(0).path, filepath.Abs(tree).concat("/UPPER.FLAC"))
+    testing.AssertEqInt64(got.get(0).size, 3 as i64)
+
+    os.RemoveAll(tree)
+    testing.AssertEqInt(library.Walk(tree).len(), 0)
+end
+
+func main:
+    fixtureTests()
+    treeTests()
+    ret testing.Summary()
+end
