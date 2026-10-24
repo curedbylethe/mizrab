@@ -43,3 +43,18 @@ $V -I dummy --no-video src22m.wav --sout '#transcode{acodec=vorb,ab=48,channels=
 ## Verification
 
 `file` on each output reports the properties in the table. Each of FLAC, MP3 and OGG was also decoded independently with `afconvert -f AIFF -d BEI16` and checked in Python: the decoded rate and channel count match, and a correlation at 440 Hz gives ~16384 (0.5 full scale) against 0 at 1000 Hz, so each file carries a clean 440 Hz tone.
+
+## Tagged fixtures
+
+`tagged.mp3` and `tagged.flac` carry tags so the library scanner's tag parser has something to read; `tone.*` carry none. They are hand-built for tag coverage and are not playable guarantees. Both are the unchanged `tone.*` audio with metadata added by `gen_tags.py` (Python 3 stdlib only, deterministic: a second run rewrites identical bytes).
+
+| File | Built from | Tags | Size (bytes) | sha256 |
+|------|------------|------|--------------|--------|
+| `tagged.mp3` | ID3v2.3 header and frames, then `tone.mp3` unchanged | `TIT2` (UTF-16 with BOM, non-ASCII), `TPE1`, `TALB` (UTF-8) | 11164 | `9fb8eacea63504005b2baaa960eca7303777fd1e9341873f4aefeea23f3dea58` |
+| `tagged.flac` | STREAMINFO of `tone.flac`, a new VORBIS_COMMENT block, then the `tone.flac` frames | `TITLE`, `ARTIST`, `ALBUM`, `TRACKNUMBER=3`, `TRACKTOTAL=12`, `DATE=2004-05-01` | 25325 | `a6186b823157ded9c458b1ef9d3ba2d5339e7646f6c81be9833d0e5ec2db4ba0` |
+
+```sh
+python3 -I tests/fixtures/gen_tags.py
+```
+
+`tone.flac` already holds an encoder-written VORBIS_COMMENT block with no tags; the generator replaces it. The FLAC audio frames are untouched, so `tagged.flac` keeps 66150 frames at 44100 Hz (1500 ms).
