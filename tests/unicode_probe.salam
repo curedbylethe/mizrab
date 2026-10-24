@@ -1,0 +1,73 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Prints the Unicode measurement table that tests/unicode_test.salam asserts.
+// Not a test: the name has no _test suffix, so tests/run.sh never discovers it
+// and it may print freely. Run it by hand:
+//
+//   cd tests && salam build unicode_probe.salam --output=../build/tests/unicode_probe --backend=llvm --log-level=warn && ../build/tests/unicode_probe
+//
+// Columns: bytes, codepoints, graphemes, term.Width. The true terminal column
+// count is not computable from inside the process; it is read by eye in a
+// terminal and kept as a comment in unicode_test.salam. Literals are escapes
+// (\uXXXX, \UXXXXXXXX) so the source does not depend on an editor's rendering.
+
+import sort
+import str
+import term
+
+func row(label: str, s: str):
+    println label, "| bytes", str.Len(s), "| codepoints", str.CodePoints(s).len(), "| graphemes", str.GraphemeCount(s), "| term.Width", term.Width(s)
+end
+
+func place(label: str, title: str):
+    mut v := Vector {} as Vector<str>
+    v.push("Zebra")
+    v.push("apple")
+    v.push(title)
+    sort.StableSortBy(v, (a: str, b: str): ret str.Compare(a, b) < 0 end)
+    println label, "sorts as:", v[0], v[1], v[2]
+    repeat 3 in i:
+        if v[i] == title:
+            println label, "position", i
+        end
+    end
+end
+
+func main:
+    row("han 界", "界")
+    row("kanji 音楽", "音楽")
+    row("hangul 한", "한")
+    row("e-acute NFC", "é")
+    row("e-acute NFD", "é")
+    row("flag 🇮🇷", "\U0001F1EE\U0001F1F7")
+    row("family 👨‍👩‍👧‍👦", "\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466")
+    row("thumbs 👍🏽", "\U0001F44D\U0001F3FD")
+    row("arabic لا", "لا")
+    row("devanagari नमस्ते", "नमस्ते")
+    row("lone acute", "́")
+    row("tab a<TAB>b", "a\tb")
+
+    println "Compare Z a", str.Compare("Z", "a")
+    println "Compare NFC NFD cafe", str.Compare(str.NFC("café"), str.NFD("café"))
+    println "NFC bytes", str.Len(str.NFC("café")), "NFD bytes", str.Len(str.NFD("café"))
+    place("Ecole NFC", str.NFC("École"))
+    place("Ecole NFD", str.NFD("École"))
+
+    // term.Truncate inherits the codepoint count: 3 columns asked, 6 occupied.
+    t := term.Truncate("界界界界", 3)
+    println "Truncate 4xhan to 3: bytes", str.Len(t), "Width", term.Width(t)
+    ret 0
+end

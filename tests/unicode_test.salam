@@ -1,0 +1,107 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The Unicode record: what the pure string functions and term.Width report for
+// a fixed corpus, pinned as assertions. Every number below was printed by
+// tests/unicode_probe.salam on Salam 0.5.9 and is observed, not desired: a row
+// marked "(wrong)" is a result that disagrees with how a terminal draws the
+// text, recorded so the gap is visible. When basalam's width work or a Salam
+// release changes a number, this test fails and the row is re-measured.
+//
+// Columns asserted: str.Len (bytes), str.CodePoints(s).len(), str.GraphemeCount,
+// term.Width. The true terminal column count cannot be computed from inside the
+// process, so it is commentary on each row (UAX #11 East Asian Width; marked
+// "varies" where terminals disagree).
+
+import sort
+import str
+import term
+import testing
+
+func check(s: str, bytes: int, cps: int, graphemes: int, width: int):
+    testing.AssertEqInt(str.Len(s), bytes)
+    testing.AssertEqInt(str.CodePoints(s).len(), cps)
+    testing.AssertEqInt(str.GraphemeCount(s), graphemes)
+    testing.AssertEqInt(term.Width(s), width)
+end
+
+// Index of `title` after sorting it with "Zebra" and "apple" by str.Compare.
+func sortedAt(title: str): int:
+    mut v := Vector {} as Vector<str>
+    v.push("Zebra")
+    v.push("apple")
+    v.push(title)
+    sort.StableSortBy(v, (a: str, b: str): ret str.Compare(a, b) < 0 end)
+    repeat 3 in i:
+        if v[i] == title:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func widthTests:
+    // observed, not desired. true columns 2; Width says 1 (wrong).
+    check("界", 3, 1, 1, 1)
+    // observed, not desired. true columns 4; Width says 2 (wrong).
+    check("音楽", 6, 2, 2, 2)
+    // observed, not desired. true columns 2; Width says 1 (wrong).
+    check("한", 3, 1, 1, 1)
+    // observed, not desired. true columns 1; correct.
+    check("é", 2, 1, 1, 1)
+    // observed, not desired. true columns 1; Width says 2, one per codepoint (wrong).
+    check("é", 3, 2, 1, 2)
+    // observed, not desired. regional-indicator pair: columns vary, usually 2.
+    check("\U0001F1EE\U0001F1F7", 8, 2, 1, 2)
+    // observed, not desired. ZWJ family: columns vary, 2 where the terminal draws one glyph; Width counts all 7 codepoints (wrong there).
+    check("\U0001F468‍\U0001F469‍\U0001F467‍\U0001F466", 25, 7, 1, 7)
+    // observed, not desired. emoji with skin-tone modifier: columns vary, usually 2.
+    check("\U0001F44D\U0001F3FD", 8, 2, 1, 2)
+    // observed, not desired. lam-alef: columns vary with ligature shaping, 1 or 2.
+    check("لا", 4, 2, 2, 2)
+    // observed, not desired. Devanagari conjunct cluster: columns vary.
+    check("नमस्ते", 18, 6, 3, 6)
+    // observed, not desired. a lone combining mark: columns vary, 0 or 1; Width counts it as a column.
+    check("́", 2, 1, 1, 1)
+    // observed, not desired. a tab is one codepoint; the columns it spans depend on the tab stop.
+    check("a\tb", 3, 3, 3, 3)
+end
+
+func truncateTests:
+    // observed, not desired. Truncate stops at 3 codepoints, so 4 wide characters cut to 3 occupy 6 columns, not 3.
+    t := term.Truncate("界界界界", 3)
+    testing.AssertEqInt(str.Len(t), 9)
+    testing.AssertEqInt(term.Width(t), 3)
+end
+
+func sortTests:
+    // observed, not desired. strcmp orders by UTF-8 bytes: "Z" (0x5A) before "a" (0x61).
+    testing.AssertEqInt(str.Compare("Z", "a"), 0 - 1)
+    // observed, not desired. NFC "e-acute" is bytes C3 A9, NFD is 65 CC 81, so the same visible word compares apart.
+    testing.AssertEqInt(str.Compare(str.NFC("café"), str.NFD("café")), 1)
+    testing.AssertEqInt(str.Len(str.NFC("café")), 5)
+    testing.AssertEqInt(str.Len(str.NFD("café")), 6)
+    // observed, not desired. The same visible title sorts last in NFC (index 2, after "apple")
+    // and first in NFD (index 0, before "Zebra").
+    testing.AssertEqInt(sortedAt(str.NFC("École")), 2)
+    testing.AssertEqInt(sortedAt(str.NFD("École")), 0)
+end
+
+func main:
+    widthTests()
+    truncateTests()
+    sortTests()
+    ret testing.Summary()
+end
