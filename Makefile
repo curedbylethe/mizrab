@@ -28,9 +28,10 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help build run test check fmt fmt-check header-check clean docs docs-check docs-format-check soak
+.PHONY: help deps build run test check fmt fmt-check header-check clean docs docs-check docs-format-check soak
 
 help:
+	@echo "make deps      fetch the packages salam.lock pins"
 	@echo "make build     compile $(ENTRY) to $(BIN) with --backend=llvm"
 	@echo "make run       build and run the player"
 	@echo "make test      build and run tests/*_test.salam plus the CLI smoke checks"
@@ -45,7 +46,12 @@ help:
 	@echo "make soak      one hour of frames through the engine on a virtual clock (opt-in, not in test or CI)"
 	@echo "Salam $(SALAM_VERSION)"
 
-build: $(MINIAUDIO_OBJ) $(SHIM_OBJ)
+# `salam build` never downloads, so the committed lock alone leaves a fresh
+# clone unable to build. This is the one step both a first clone and CI run.
+deps:
+	$(SALAM) deps
+
+build: deps $(MINIAUDIO_OBJ) $(SHIM_OBJ)
 	@mkdir -p $(BUILD)
 	$(SALAM) build $(ENTRY) --output=$(BIN) $(FLAGS)
 
