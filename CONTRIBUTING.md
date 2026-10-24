@@ -96,9 +96,10 @@ chore(deps): bump Salam to 0.5.7
 
 ## Version pins and the bump procedure
 
-mizrab has five pins: the Salam compiler (`.salam-version`), basalam
-(`vendor/basalam`), miniaudio (`audio/miniaudio.h` and `audio/miniaudio.c`),
-stb_vorbis (`audio/stb_vorbis.c`) and the Mintlify CLI. Current values and the bump procedure are on the site:
+mizrab has six pins: the Salam compiler (`.salam-version`), the setup action
+that installs it (`.github/workflows/ci.yml`), basalam (`vendor/basalam`),
+miniaudio (`audio/miniaudio.h` and `audio/miniaudio.c`), stb_vorbis
+(`audio/stb_vorbis.c`) and the Mintlify CLI. Current values and the bump procedure are on the site:
 [version pins](https://mizrab.mintlify.app/contributing#version-pins).
 
 The Mintlify pin lives only in `.mint-version`. The Makefile and CI read that
