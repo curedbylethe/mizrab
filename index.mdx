@@ -18,7 +18,7 @@ Build it with [install](/install), then see the [make targets](/make-targets), t
 
 ## Built on
 
-- [**basalam**](https://github.com/curedbylethe/basalam) — a retained-mode terminal UI library for Salam. It is vendored at `vendor/basalam` and pinned to the commit the `v0.2.0` release tag points at.
+- [**basalam**](https://github.com/curedbylethe/basalam) — a retained-mode terminal UI library for Salam. It comes from Salam's package registry at `v0.3.1`, pinned in `salam.lock`.
 - [**Salam**](https://github.com/SalamLang/Salam) — the language, compiler and standard library mizrab is written in.
 
-The player binary currently imports only the Salam standard library (`flag`, `os`) plus its own `commands` package; the basalam include arrives with the application layer. The audio engine additionally uses `atomic`, `mem`, `sync` and `thread`, and is exercised by the tests, not by the binary. The `player` package is tested headlessly and is not yet included by the binary.
+The player binary currently imports only the Salam standard library (`flag`, `os`) plus its own `commands` package; the basalam import arrives with the application layer. The audio engine additionally uses `atomic`, `mem`, `sync` and `thread`, and is exercised by the tests, not by the binary. The `player` package is tested headlessly and is not yet included by the binary.

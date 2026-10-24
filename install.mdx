@@ -1,16 +1,16 @@
 ---
 title: "Install and build"
-description: "Build mizrab from source with the pinned Salam compiler and the vendored basalam submodule."
+description: "Build mizrab from source with the pinned Salam compiler and the locked Salam packages."
 keywords:
   - "install"
   - "build"
   - "salam"
   - "clone"
-  - "submodule"
+  - "salam add"
   - "macos"
 ---
 
-mizrab is built from source; there is no separate installer. You need the pinned Salam compiler, a C toolchain with LLVM, and a clone that includes the vendored basalam submodule.
+mizrab is built from source; there is no separate installer. You need the pinned Salam compiler, a C toolchain with LLVM, and network access on the first build, which downloads the locked packages.
 
 ## Prerequisites
 
@@ -21,11 +21,11 @@ mizrab is built from source; there is no separate installer. You need the pinned
 ## Clone
 
 ```sh
-git clone --recurse-submodules https://github.com/curedbylethe/mizrab
+git clone https://github.com/curedbylethe/mizrab
 cd mizrab
 ```
 
-`--recurse-submodules` matters: `vendor/basalam` is a git submodule pinned to the `v0.2.0` release tag, and it stays empty without that flag. If you cloned without it, run `git submodule update --init --recursive` before building.
+The first `make build` runs `salam deps`, which downloads the packages `salam.lock` pins and checks their sha256 sums. That needs network access once. If you are moving to a newer pin, `make deps` re-runs it on its own.
 
 ## Build and run
 
@@ -34,7 +34,7 @@ make build
 make run
 ```
 
-`make build` first compiles the vendored miniaudio and its C glue into `build/` with `cc`, then compiles `main.salam` to `build/mizrab` with `--backend=llvm` and links both objects in; `make run` builds and then runs the binary. At this commit that binary prints its usage block and exits 0. The [audio engine](/audio-engine) is built and tested, but no command plays a file yet: the first playable build arrives when the command line gains a play command. There is no library scanning or interface. Run `make help` for the short target list, and see [make targets](/make-targets) for the full reference.
+`make build` first runs `salam deps`, which fetches the locked packages, then compiles the vendored miniaudio and its C glue into `build/` with `cc`, then compiles `main.salam` to `build/mizrab` with `--backend=llvm` and links both objects in; `make run` builds and then runs the binary. At this commit that binary prints its usage block and exits 0. The [audio engine](/audio-engine) is built and tested, but no command plays a file yet: the first playable build arrives when the command line gains a play command. There is no library scanning or interface. Run `make help` for the short target list, and see [make targets](/make-targets) for the full reference.
 
 ## Use a compiler off `PATH`
 
