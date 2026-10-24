@@ -67,6 +67,15 @@ func taggedTests:
     testing.AssertEqInt64(f.size, 25325 as i64)
 end
 
+// A tag with an artist but no title is tagged, and its title is still the
+// filename stem rather than empty.
+func artistOnlyTests:
+    t := read("artist-only.mp3")
+    testing.AssertTrue(t.tagged)
+    testing.AssertEqStr(t.artist, "ArtistOnly")
+    testing.AssertEqStr(t.title, "artist-only")
+end
+
 func untaggedTests:
     names := ["tone.mp3", "tone.wav", "tone.flac"]
     formats := ["mp3", "wav", "flac"]
@@ -107,6 +116,7 @@ end
 
 func main:
     taggedTests()
+    artistOnlyTests()
     untaggedTests()
     idTests()
     jsonTests()
