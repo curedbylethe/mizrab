@@ -1,0 +1,109 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the Ogg reader: tagged.ogg (tone.ogg re-muxed with a replacement
+// comment packet) must report its tags, or the stage proves nothing; the
+// synthetic packet-split.ogg has a comment packet that crosses a page boundary,
+// so its album, which sits after the boundary, proves the assembler joins
+// pages; tone.ogg parses but carries nothing and so stays untagged; and input
+// that is not a whole Vorbis comment packet (a WAV head, text, a head cut in
+// the middle of the comment page) is refused with nothing left allocated. The
+// ID3 path is checked once more so the dispatch cannot have broken it.
+
+import audio.tag
+import filepath
+import mem
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+// The strings tests/fixtures/gen_tags.py writes.
+title := "Música"
+artist := "Mizrab Tester"
+album := "Fixture Album"
+
+// Reads fixtures/<name> through Walk-style data: size and mtime from lstat.
+func read(name: str): library.Track:
+    path := filepath.Join("fixtures", name)
+    st := library.StatPath(path)
+    ret library.ReadTrack(library.Entry { path = filepath.Abs(path), size = st.size, mtimeNs = st.mtimeNs })
+end
+
+// ReadOggTags over the first `cap` bytes of fixtures/<name>.
+func readTags(name: str, cap: int, out &: tag.Tags): bool:
+    buf := mem.Allocate(library.HeadCap as u64)
+    defer mem.Free(buf)
+    got := library.ReadHead(filepath.Join("fixtures", name), 0 as i64, cap, buf)
+    ret library.ReadOggTags(buf, got, out)
+end
+
+func taggedTests:
+    t := read("tagged.ogg")
+    testing.AssertTrue(t.tagged)
+    testing.AssertEqStr(t.title, title)
+    testing.AssertEqStr(t.artist, artist)
+    testing.AssertEqStr(t.album, album)
+    testing.AssertEqStr(t.format, "ogg")
+    testing.AssertEqInt(t.track, 3)
+    testing.AssertEqInt(t.trackTotal, 12)
+    testing.AssertEqInt(t.disc, 1)
+    testing.AssertEqInt(t.year, 2004)
+    testing.AssertEqInt64(t.size, 5506 as i64)
+
+    s := read("packet-split.ogg")
+    testing.AssertTrue(s.tagged)
+    testing.AssertEqStr(s.title, title)
+    testing.AssertEqStr(s.artist, artist)
+    testing.AssertEqStr(s.album, album)
+end
+
+func untaggedTests:
+    t := read("tone.ogg")
+    testing.AssertFalse(t.tagged)
+    testing.AssertEqStr(t.title, "tone")
+
+    mut out := tag.NewTags()
+    testing.AssertTrue(readTags("tone.ogg", library.HeadCap, out))
+    testing.AssertFalse(tag.HasTags(out))
+    tag.FreeTags(out)
+end
+
+func refusedTests:
+    mut out := tag.NewTags()
+    testing.AssertFalse(readTags("tone.wav", library.HeadCap, out))
+    testing.AssertFalse(library.ReadOggTags("not ogg" as void*, 7, out))
+    testing.AssertFalse(library.ReadOggTags("not an ogg stream, but long enough to look at" as void*, 45, out))
+    // The head ends inside the comment page: no complete comment packet.
+    testing.AssertFalse(readTags("tagged.ogg", 100, out))
+    testing.AssertEqInt(out.title.len(), 0)
+    testing.AssertEqInt(out.artist.len(), 0)
+end
+
+func otherFormatTests:
+    m := read("tagged.mp3")
+    testing.AssertTrue(m.tagged)
+    testing.AssertEqStr(m.format, "mp3")
+    testing.AssertFalse(read("tone.wav").tagged)
+end
+
+func main:
+    taggedTests()
+    untaggedTests()
+    refusedTests()
+    otherFormatTests()
+    ret testing.Summary()
+end

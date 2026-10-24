@@ -1,0 +1,267 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Ogg Vorbis comments, read from a head buffer. std has no Ogg parser, so this
+// file assembles pages into packets itself: the first stream whose first page
+// is a Vorbis identification packet is chosen, and the next packet completed on
+// that stream must be the comment packet. Nothing is searched by byte offset,
+// and one page is never assumed to be one packet.
+//
+// No CRC is checked: a head read truncates by design, so a CRC check would
+// reject valid data. Nothing past the comment packet is read.
+//
+// Caps, all applied before anything is allocated or scanned, and all failing
+// the read rather than truncating it: 64 pages, 64 comments, 64 KiB for the
+// comment packet and 4 KiB for each value this file keeps. A value of an
+// ignored key (METADATA_BLOCK_PICTURE) is never read, so its size is moot.
+
+package library
+
+import audio.tag
+import mem
+import str
+
+const oggMaxPages := 64
+const oggMaxComments := 64
+const oggMaxPacket := 65536
+const oggMaxValue := 4096
+
+func oggByte(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func oggLe32(p: void*, i: int): int:
+    ret oggByte(p, i) | (oggByte(p, i + 1) << 8) | (oggByte(p, i + 2) << 16) | (oggByte(p, i + 3) << 24)
+end
+
+// True when the bytes at p+i are `\x01vorbis` (kind 1) or `\x03vorbis` (kind 3).
+func oggIsVorbis(p: void*, i: int, kind: int): bool:
+    ret oggByte(p, i) == kind and oggByte(p, i + 1) == 118 and oggByte(p, i + 2) == 111 and oggByte(p, i + 3) == 114 and oggByte(p, i + 4) == 98 and oggByte(p, i + 5) == 105 and oggByte(p, i + 6) == 115
+end
+
+// A fresh NUL-terminated copy of n bytes at p+off; "" when n <= 0.
+func oggStr(p: void*, off: int, n: int): str:
+    if n <= 0:
+        ret ""
+    end
+    d := mem.Allocate((n + 1) as u64)
+    mem.Copy(d, ((p as i64) + (off as i64)) as void*, n as u64)
+    bd := d as u8*
+    bd[n] = 0
+    ret d as str
+end
+
+// Replaces `old` with a copy of the value, freeing `old` (a repeated key keeps
+// the last one, and nothing leaks).
+func oggSet(old: str, p: void*, off: int, n: int): str:
+    if old.len() > 0:
+        mem.Free(old as void*)
+    end
+    ret oggStr(p, off, n)
+end
+
+// The value of the digit run at off, stopping at stop or at the first non-digit.
+// Nine digits at most, so a long run cannot overflow.
+func oggNum(p: void*, off: int, stop: int): int:
+    mut v := 0
+    mut i := off
+    until i < stop and i < off + 9 and oggByte(p, i) >= 48 and oggByte(p, i) <= 57:
+        v = v * 10 + oggByte(p, i) - 48
+        i += 1
+    end
+    ret v
+end
+
+// True when the n bytes at p+off are all ASCII digits.
+func oggDigits(p: void*, off: int, n: int): bool:
+    repeat n in i:
+        b := oggByte(p, off + i)
+        if b < 48 or b > 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+// One KEY=value comment into out. False only when a kept value is over the cap.
+func oggField(p: void*, at: int, len: int, out &: tag.Tags): bool:
+    mut sep := 0 - 1
+    mut i := 0
+    until i < len and sep < 0:
+        if oggByte(p, at + i) == 61:
+            sep = i
+        end
+        i += 1
+    end
+    // Every key kept is shorter than 12 bytes.
+    if sep <= 0 or sep > 12:
+        ret true
+    end
+    keyStr := oggStr(p, at, sep)
+    key := keyStr.lower()
+    mem.Free(keyStr as void*)
+    v := at + sep + 1
+    n := len - sep - 1
+    mut ok := true
+    if key == "title" or key == "artist" or key == "album" or key == "albumartist" or key == "composer" or key == "genre" or key == "date" or key == "tracknumber" or key == "discnumber":
+        if n > oggMaxValue:
+            ok = false
+        else if key == "title":
+            out.title = oggSet(out.title, p, v, n)
+        else if key == "artist":
+            out.artist = oggSet(out.artist, p, v, n)
+        else if key == "album":
+            out.album = oggSet(out.album, p, v, n)
+        else if key == "albumartist":
+            out.albumartist = oggSet(out.albumartist, p, v, n)
+        else if key == "composer":
+            out.composer = oggSet(out.composer, p, v, n)
+        else if key == "genre":
+            out.genre = oggSet(out.genre, p, v, n)
+        else if key == "date":
+            // The first four digits, so "2004-05-01" is 2004.
+            if n >= 4 and oggDigits(p, v, 4):
+                out.year = oggNum(p, v, v + 4)
+            end
+        else if key == "tracknumber":
+            // "n" or "n/total".
+            out.track = oggNum(p, v, v + n)
+            mut j := 0
+            until j < n and oggByte(p, v + j) != 47:
+                j += 1
+            end
+            if j < n:
+                out.tracks = oggNum(p, v + j + 1, v + n)
+            end
+        else:
+            out.disc = oggNum(p, v, v + n)
+        end
+    end
+    mem.Free(key as void*)
+    ret ok
+end
+
+// The comment packet at p (n bytes) into out.
+func oggComments(p: void*, n: int, out &: tag.Tags): bool:
+    if n < 15 or oggIsVorbis(p, 0, 3) == false:
+        ret false
+    end
+    vendor := oggLe32(p, 7)
+    if vendor < 0 or vendor > n - 15:
+        ret false
+    end
+    mut at := 11 + vendor
+    count := oggLe32(p, at)
+    at += 4
+    if count < 0 or count > oggMaxComments:
+        ret false
+    end
+    repeat count:
+        if at + 4 > n:
+            ret false
+        end
+        flen := oggLe32(p, at)
+        at += 4
+        if flen < 0 or flen > n - at:
+            ret false
+        end
+        if oggField(p, at, flen, out) == false:
+            ret false
+        end
+        at += flen
+    end
+    ret true
+end
+
+@en "ReadOggTags"
+/// Reads the Vorbis comments of an Ogg file from its head: p and n are a buffer
+/// from ReadHead. Returns true when a Vorbis comment packet was found and
+/// parsed, false for anything else (not Ogg, Opus or another codec, no
+/// complete comment packet in the buffer, a cap exceeded). `out` must be empty
+/// on entry; on false it is left empty, and on true the caller frees it with
+/// tag.FreeTags. Keeps TITLE, ARTIST, ALBUM, ALBUMARTIST, COMPOSER, GENRE, DATE
+/// (first four digits), TRACKNUMBER (n or n/total) and DISCNUMBER; every other
+/// key is ignored. Caps: 64 pages, 64 comments, 64 KiB comment packet, 4 KiB per
+/// kept value. CRCs are not checked, because a head read truncates by design.
+pub func ReadOggTags(p: void*, n: int, out &: tag.Tags): bool:
+    if n < 27 or oggByte(p, 0) != 79:
+        ret false
+    end
+    pkt := mem.Allocate(oggMaxPacket as u64)
+    defer mem.Free(pkt)
+    mut plen := 0
+    mut chosen := false
+    mut serial := 0
+    // 0 while the identification packet is still running, 1 once it is done.
+    mut stage := 0
+    mut at := 0
+    mut pages := 0
+    until pages < oggMaxPages and at + 27 <= n:
+        if oggByte(p, at) != 79 or oggByte(p, at + 1) != 103 or oggByte(p, at + 2) != 103 or oggByte(p, at + 3) != 83:
+            ret false
+        end
+        flags := oggByte(p, at + 5)
+        ser := oggLe32(p, at + 14)
+        nseg := oggByte(p, at + 26)
+        if at + 27 + nseg > n:
+            ret false
+        end
+        mut size := 0
+        repeat nseg in s:
+            size += oggByte(p, at + 27 + s)
+        end
+        body := at + 27 + nseg
+        if chosen == false and (flags & 3) == 2 and body + 7 <= n and oggIsVorbis(p, body, 1):
+            chosen = true
+            serial = ser
+        end
+        if chosen == false or ser != serial:
+            at = body + size
+            pages += 1
+            continue
+        end
+
+        mut pos := body
+        repeat nseg in s:
+            seg := oggByte(p, at + 27 + s)
+            if pos + seg > n:
+                ret false
+            end
+            if stage == 0:
+                if seg < 255:
+                    stage = 1
+                end
+            else:
+                if plen + seg > oggMaxPacket:
+                    ret false
+                end
+                mem.Copy(((pkt as i64) + (plen as i64)) as void*, ((p as i64) + (pos as i64)) as void*, seg as u64)
+                plen += seg
+                if seg < 255:
+                    if oggComments(pkt, plen, out):
+                        ret true
+                    end
+                    tag.FreeTags(out)
+                    ret false
+                end
+            end
+            pos += seg
+        end
+        at = pos
+        pages += 1
+    end
+    ret false
+end

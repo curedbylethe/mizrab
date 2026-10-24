@@ -16,10 +16,10 @@
 // One track: what the index stores about an audio file, and how it is read.
 //
 // ReadTrack reads a bounded head of the file (ReadHead, never the whole file)
-// and parses ID3v2 and FLAC Vorbis comments with audio.tag, plus the FLAC
-// STREAMINFO block with audio.flac. A file with no usable tag is untagged:
-// tagged is false and the title is the filename stem, so a title is never
-// empty. Ogg files are not parsed yet and read as untagged.
+// and parses ID3v2 and FLAC Vorbis comments with audio.tag, Ogg Vorbis comments
+// with ReadOggTags (ogg.salam), plus the FLAC STREAMINFO block with audio.flac.
+// A file with no usable tag is untagged: tagged is false and the title is the
+// filename stem, so a title is never empty.
 //
 // Fidelity: strings are stored as the bytes the file holds. Titles and paths
 // are never normalised, so invalid UTF-8 survives and collation is a
@@ -96,7 +96,12 @@ pub func ReadTrack(e: Entry): Track:
     got := ReadHead(e.path, 0 as i64, HeadCap, buf)
     if got > 0:
         mut ok := false
-        mut tags := tag.ReadTags(buf, got, ok)
+        mut tags := tag.NewTags()
+        if t.format == "ogg" or t.format == "oga":
+            ok = ReadOggTags(buf, got, tags)
+        else:
+            tags = tag.ReadTags(buf, got, ok)
+        end
         if ok and tag.HasTags(tags):
             t.title = str.Clone(tags.title)
             t.artist = str.Clone(tags.artist)
