@@ -27,12 +27,12 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 | --- | --- | --- |
 | `make help` | prints the target list and `Salam <version>` | quick reference, no build |
 | `make deps` | `salam deps` | download the packages `salam.lock` pins and check every sha256; `make build` runs it first |
-| `make build` | compiles `audio/miniaudio.c` and `audio/ma_shim.c` to `build/miniaudio.o` and `build/ma_shim.o` with `cc`, then `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab`, linking the two objects |
+| `make build` | runs `make deps`, compiles `audio/miniaudio.c`, `audio/ma_shim.c` and `library/library_shim.c` to `build/miniaudio.o`, `build/ma_shim.o` and `build/library_shim.o` with `cc`, then `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab`, linking the three objects |
 | `make run` | `make build`, then `./build/mizrab` | build and run the player |
 | `make test` | `make build`, then `sh tests/run.sh` | golden tests, including the audio engine on the null backend, plus the CLI smoke checks; see [tests](/tests) |
 | `make clean` | `rm -rf build .salam-build` | remove build output and the compiler's scratch directory |
 
-The two objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.c`, `ma_shim.c` or `ma_shim.h` change, so a clean tree compiles them once; the first `make build` is slower than later ones. The one backend is LLVM: there is no `--backend=c` path and no second build target.
+The three objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.c`, `ma_shim.c`, `ma_shim.h`, `library_shim.c` or `library_shim.h` change, so a clean tree compiles them once; the first `make build` is slower than later ones. The one backend is LLVM: there is no `--backend=c` path and no second build target.
 
 ## Formatting
 

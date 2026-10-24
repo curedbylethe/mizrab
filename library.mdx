@@ -44,7 +44,7 @@ There is one schema version and no migration. A change of schema means a rescan,
 | `year`, `track`, `trackTotal`, `disc` | Integers from the tags; 0 means absent |
 | `durationMs` | Duration in milliseconds; 0 means unknown |
 | `size`, `mtimeNs` | Size in bytes and modification time in nanoseconds since the epoch, from `lstat` |
-| `tagged` | `true` when at least one tag parsed |
+| `tagged` | `true` when the tags gave a title, artist, album, year or track number; otherwise the tag fields stay empty and `title` is the filename stem |
 | `format` | The lowercase extension without the dot |
 
 ## Scanning rules
@@ -52,26 +52,26 @@ There is one schema version and no migration. A change of schema means a rescan,
 - Roots are walked recursively. A root may itself be a symlink to a directory; the scan follows that one link.
 - A file is indexed when its extension is `.mp3`, `.flac`, `.ogg`, `.oga` or `.wav`, in any letter case. `.opus` is not on the list because the decoder cannot open it.
 - Names that start with `.` are skipped, files and directories alike. There is no other ignore list.
-- Any symlink found inside a root is skipped, file or directory. Nothing is indexed twice and a link cannot form a cycle.
+- Any symlink found inside a root is skipped, file or directory. A link cannot add a duplicate or form a cycle.
 - Directories more than 32 levels below a root are not entered.
 - A directory that cannot be listed is skipped silently; the walk carries on.
 - Roots that overlap list a file once, compared by exact path.
-- A root that is missing or is not a directory makes the scan fail without writing; so does a failed save. Every root is checked before the index is read, so an unmounted drive or a typo cannot prune it.
+- A root that is missing or is not a directory makes the scan fail without writing; so does a failed save. Every root is checked before the index is read, so a missing or unopenable root cannot prune it. An existing but empty root, such as a mount point with nothing mounted, still removes its tracks.
 
 ## Metadata
 
-Each file's first 256 KiB is read through a small C shim; a track file is never read whole. From that head the scanner parses:
+Each file is read up to its first 256 KiB through a small C shim: the whole file when it is shorter. From that head the scanner parses:
 
 - ID3v2 for MP3;
 - Vorbis comments for FLAC;
 - Vorbis comments for Ogg, with a page assembler written for this package, because the standard library has no Ogg parser;
 - the STREAMINFO block for FLAC, which gives `durationMs`.
 
-A file with no usable tag is untagged: `tagged` is `false` and `title` is the filename stem, so a title is never empty. An unreadable or empty file is still a track, untagged and with duration 0.
+A file with no usable tag is untagged: `tagged` is `false`. Whenever the tags give no title, `title` is the filename stem, so a title is never empty. An unreadable or empty file is still a track, untagged and with duration 0.
 
 Limits:
 
-- ID3v1 lives in the last 128 bytes of a file, which a head read never reaches, so it is not read.
+- ID3v1 lives in the last 128 bytes of a file. A file that fits in the 256 KiB head has it read; a larger file never reaches it.
 - Artwork, lyrics, comments, BPM and bitrate are not stored.
 - `durationMs` is 0 for MP3, Ogg and WAV. Zero means unknown, never a guess.
 - An Ogg comment packet over 64 KiB, for example one carrying embedded art, reads as untagged.
@@ -86,9 +86,9 @@ Limits:
 
 ## Unicode
 
-Paths and titles can hold any Unicode. The table records what the standard library reports for a fixed corpus; `tests/unicode_test.salam` asserts every number in it, and `tests/unicode_probe.salam` prints the table so you can re-measure. These are observations, not intentions. The fix for width belongs to basalam's width work, not to the scanner, and nothing here adds a width table.
+Paths and titles can hold any Unicode. The table records what the standard library reports for a fixed corpus; `tests/unicode_test.salam` asserts the four measured columns, and `tests/unicode_probe.salam` prints the table so you can re-measure. These are observations, not intentions. The fix for width belongs to basalam's width work, not to the scanner, and nothing here adds a width table.
 
-Measured on Salam 0.5.9. The first four columns are measured. The last is the number of terminal columns the text occupies by Unicode East Asian Width (UAX #11); it is not computed by the probe, and where terminals disagree it says so.
+Measured on Salam 0.5.9. The four columns after the text are measured. The last is the number of terminal columns the text occupies by Unicode East Asian Width (UAX #11); it is not computed by the probe, and where terminals disagree it says so.
 
 | Text | Bytes | Codepoints | Graphemes | `term.Width` | Terminal columns |
 | --- | --- | --- | --- | --- | --- |
@@ -96,7 +96,7 @@ Measured on Salam 0.5.9. The first four columns are measured. The last is the nu
 | `音楽` | 6 | 2 | 2 | 2 | 4 |
 | `한` | 3 | 1 | 1 | 1 | 2 |
 | `é` (NFC) | 2 | 1 | 1 | 1 | 1 |
-| `é` (NFD) | 3 | 2 | 1 | 2 | 1 |
+| `e` + U+0301 (NFD) | 3 | 2 | 1 | 2 | 1 |
 | `🇮🇷` | 8 | 2 | 1 | 2 | varies, usually 2 |
 | `👨‍👩‍👧‍👦` | 25 | 7 | 1 | 7 | varies, 2 where drawn as one glyph |
 | `👍🏽` | 8 | 2 | 1 | 2 | varies, usually 2 |
