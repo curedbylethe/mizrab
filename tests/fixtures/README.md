@@ -46,15 +46,21 @@ $V -I dummy --no-video src22m.wav --sout '#transcode{acodec=vorb,ab=48,channels=
 
 ## Tagged fixtures
 
-`tagged.mp3` and `tagged.flac` carry tags so the library scanner's tag parser has something to read; `tone.*` carry none. They are hand-built for tag coverage and are not playable guarantees. Both are the unchanged `tone.*` audio with metadata added by `gen_tags.py` (Python 3 stdlib only, deterministic: a second run rewrites identical bytes).
+`tagged.mp3`, `tagged.flac` and `tagged.ogg` carry tags so the library scanner's tag parser has something to read; `tone.*` carry none. They are hand-built for tag coverage and are not playable guarantees. Each is the unchanged `tone.*` audio with metadata added by `gen_tags.py` (Python 3 stdlib only, deterministic: a second run rewrites identical bytes). `packet-split.ogg` is the odd one out, described below.
 
 | File | Built from | Tags | Size (bytes) | sha256 |
 |------|------------|------|--------------|--------|
 | `tagged.mp3` | ID3v2.3 header and frames, then `tone.mp3` unchanged | `TIT2` (UTF-16 with BOM, non-ASCII), `TPE1`, `TALB` (UTF-8) | 11164 | `9fb8eacea63504005b2baaa960eca7303777fd1e9341873f4aefeea23f3dea58` |
 | `tagged.flac` | STREAMINFO of `tone.flac`, a new VORBIS_COMMENT block, then the `tone.flac` frames | `TITLE`, `ARTIST`, `ALBUM`, `TRACKNUMBER=3`, `TRACKTOTAL=12`, `DATE=2004-05-01` | 25325 | `a6186b823157ded9c458b1ef9d3ba2d5339e7646f6c81be9833d0e5ec2db4ba0` |
+| `tagged.ogg` | `tone.ogg` re-muxed: its identification packet and audio pages unchanged, the comment page rebuilt with a new comment packet (the original setup packet kept) and a fresh page CRC | `TITLE=Música` (UTF-8), `ARTIST`, `Album` (mixed-case key), `TRACKNUMBER=3/12`, `DISCNUMBER=1`, `DATE=2004-05-01`, plus an ignored `METADATA_BLOCK_PICTURE` | 5506 | `ddc10c956a9344445ea10c4449d897e190b236bab37761f98226c210d611464e` |
+| `packet-split.ogg` | Built from scratch, no audio | `TITLE=Música`, `FILLER` (500 bytes, ignored), `ARTIST`, `ALBUM` | 760 | `2ca5575b046cf5c61f5f184c80bcf819b7c91385435807874a96e95448a9ac92` |
 
 ```sh
 python3 -I tests/fixtures/gen_tags.py
 ```
 
 `tone.flac` already holds an encoder-written VORBIS_COMMENT block with no tags; the generator replaces it. The FLAC audio frames are untouched, so `tagged.flac` keeps 66150 frames at 44100 Hz (1500 ms).
+
+`tagged.ogg` has valid page CRCs (Ogg CRC-32: polynomial `0x04C11DB7`, initial value 0, no final xor, MSB first, over the page with its CRC field zeroed). VLC 3.0.20 decodes it to the same PCM as `tone.ogg`, and refuses a copy with one CRC bit flipped.
+
+`packet-split.ogg` is a parser edge case, not audio: an identification packet, a comment packet split over two pages (the first page ends on a lacing value of 255, the next is flagged continued), a stub setup packet and an end page. Its pages carry correct CRCs but the identification and setup packets are not a real codec setup, so no decoder should be pointed at it. The album comes after the page boundary, so reading it proves the pages were joined.

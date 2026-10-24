@@ -34,11 +34,11 @@ tree := "../build/tests/walktree"
 func fixtureTests:
     base := filepath.Abs("fixtures")
     got := library.Walk("fixtures")
-    testing.AssertEqInt(got.len(), 6)
+    testing.AssertEqInt(got.len(), 8)
 
-    names := ["tagged.flac", "tagged.mp3", "tone.flac", "tone.mp3", "tone.ogg", "tone.wav"]
-    sizes := [25325 as i64, 11164 as i64, 25237 as i64, 11075 as i64, 5422 as i64, 24044 as i64]
-    repeat 6 in i:
+    names := ["packet-split.ogg", "tagged.flac", "tagged.mp3", "tagged.ogg", "tone.flac", "tone.mp3", "tone.ogg", "tone.wav"]
+    sizes := [760 as i64, 25325 as i64, 11164 as i64, 5506 as i64, 25237 as i64, 11075 as i64, 5422 as i64, 24044 as i64]
+    repeat 8 in i:
         e := got.get(i)
         testing.AssertEqStr(e.path, base.concat("/").concat(names[i]))
         testing.AssertEqInt64(e.size, sizes[i])
