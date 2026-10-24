@@ -13,18 +13,23 @@
  *
  */
 
+import conv
 import flag
 import os
 
 include "commands/commands.salam"
+include "library/library.salam"
 
 link static "build/miniaudio.o"
 link static "build/ma_shim.o"
+link static "build/library_shim.o"
 
 func main:
     f := flag.New("mizrab", commands.Usage())
     defer flag.Free(f)
     flag.AddBool(f, "version", "v", false, "print the version and exit")
+    flag.AddBool(f, "scan", "", false, "scan the library roots given as arguments and write the index")
+    flag.AddStr(f, "index", "", "", "index file to read and write (default: <data>/mizrab/index.json)")
     if not flag.Parse(f, os.Args()):
         println "mizrab:", flag.Error(f)
         ret 2
@@ -35,6 +40,35 @@ func main:
     end
     if flag.GetBool(f, "version"):
         println "mizrab " + commands.Version
+        ret 0
+    end
+    if flag.GetBool(f, "scan"):
+        // os.Args() includes the program name, which Parse files as positional 0
+        // on 0.5.9; skip it only when it is there, so a toolchain that drops it
+        // does not lose the first root.
+        args := flag.Positional(f)
+        mut roots := Vector {} as Vector<str>
+        mut first := 0
+        if args.len() > 0 and args[0] == os.Args()[0]:
+            first = 1
+        end
+        repeat args.len() - first in i:
+            roots.push(args[i + first])
+        end
+        if roots.len() == 0:
+            println "mizrab: --scan needs at least one root"
+            ret 2
+        end
+        mut indexPath := flag.GetStr(f, "index")
+        if indexPath == "":
+            indexPath = library.DefaultIndexPath()
+        end
+        mut count := library.ScanCount {}
+        if library.Scan(roots, indexPath, count) != 0:
+            println "mizrab: scan failed: " + indexPath
+            ret 1
+        end
+        println "mizrab: scanned " + conv.FormatInt(count.total as i64) + " tracks: " + conv.FormatInt(count.added as i64) + " added, " + conv.FormatInt(count.updated as i64) + " updated, " + conv.FormatInt(count.removed as i64) + " removed"
         ret 0
     end
     print flag.Usage(f)
