@@ -50,14 +50,11 @@ Prerequisites:
 - macOS or Linux.
 
 ```sh
-git clone --recurse-submodules https://github.com/curedbylethe/mizrab
+git clone https://github.com/curedbylethe/mizrab
 cd mizrab
 make build
 make run
 ```
-
-`--recurse-submodules` matters: `vendor/basalam` is a git submodule and stays
-empty without it.
 
 At this commit `make run` prints the usage block; a bare `./build/mizrab`
 prints the same block and exits 0. `make build` also compiles the vendored
@@ -77,13 +74,13 @@ including `make help` and the opt-in `make soak`.
 ## Built on
 
 - **[basalam](https://github.com/curedbylethe/basalam)** — a retained-mode
-  terminal UI library for Salam. It is vendored at `vendor/basalam` and pinned
-  to the `v0.2.0` release tag, by the commit that tag points at.
+  terminal UI library for Salam. It comes from Salam's package registry at
+  `v0.3.1`, pinned by commit and sha256 in `salam.lock`.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
 The player binary currently imports only the Salam standard library (`flag`,
-`os`) plus its own `commands` package; the basalam include arrives with the
+`os`) plus its own `commands` package; the basalam import arrives with the
 application layer. The audio engine additionally uses `atomic`, `mem`, `sync`
 and `thread`, and is exercised by the tests, not by the binary. The `player`
 package is tested headlessly and is not yet included by the binary.

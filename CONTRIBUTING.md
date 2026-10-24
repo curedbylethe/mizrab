@@ -9,10 +9,10 @@ covers setup, the pins, the conventions and how to report an upstream defect.
 1. Install the Salam compiler, version **0.5.9** (`salam version` to check).
    See the [Salam repository](https://github.com/SalamLang/Salam) for how to
    build or install it.
-2. Clone with the submodule, then build and test:
+2. Clone, then build and test:
 
    ```sh
-   git clone --recurse-submodules https://github.com/curedbylethe/mizrab
+   git clone https://github.com/curedbylethe/mizrab
    cd mizrab
    make build && make test
    ```
@@ -97,7 +97,7 @@ chore(deps): bump Salam to 0.5.7
 ## Version pins and the bump procedure
 
 mizrab has six pins: the Salam compiler (`.salam-version`), the setup action
-that installs it (`.github/workflows/ci.yml`), basalam (`vendor/basalam`),
+that installs it (`.github/workflows/ci.yml`), basalam (`salam.toml` and `salam.lock`),
 miniaudio (`audio/miniaudio.h` and `audio/miniaudio.c`), stb_vorbis
 (`audio/stb_vorbis.c`) and the Mintlify CLI. Current values and the bump procedure are on the site:
 [version pins](https://mizrab.mintlify.app/contributing#version-pins).

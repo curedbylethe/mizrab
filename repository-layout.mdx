@@ -20,7 +20,7 @@ mizrab is one Salam program plus the audio engine and the vendored C it drives, 
 | `config/` | Reserved for configuration loading; holds only `.gitkeep` |
 | `ui/` | Reserved for the basalam-based terminal interface; holds only `.gitkeep` |
 | `tests/` | The `*_test.salam` programs with their `.out` goldens (`cli`, `ring`, `decode`, `engine`, `state`, `player`, `queue`), the `run.sh` harness, the `soak.salam` / `soak.sh` pair behind `make soak`, the `gap.salam` / `gap.sh` pair that measures the inter-track gap by hand, and `fixtures/`, one small audio file per decoder format with its provenance |
-| `vendor/basalam/` | The pinned basalam submodule, checked out at the `v0.2.0` release tag's commit |
+| `salam.toml`, `salam.lock` | The Salam manifest and its lock: the compiler floor, and the three pinned packages (`audio.flac`, `audio.tag`, basalam) with their commits and sha256 sums |
 | `index.mdx` | Site page: introduction, status and what mizrab is built on |
 | `install.mdx` | Site page: prerequisites, clone, build and run |
 | `make-targets.mdx` | Site page: the full make target reference |

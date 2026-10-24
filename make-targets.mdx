@@ -26,6 +26,7 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 | Target | Runs | Purpose |
 | --- | --- | --- |
 | `make help` | prints the target list and `Salam <version>` | quick reference, no build |
+| `make deps` | `salam deps` | download the packages `salam.lock` pins and check every sha256; `make build` runs it first |
 | `make build` | compiles `audio/miniaudio.c` and `audio/ma_shim.c` to `build/miniaudio.o` and `build/ma_shim.o` with `cc`, then `salam build main.salam --output=build/mizrab --log-level=warn --backend=llvm` | compile the player to `build/mizrab`, linking the two objects |
 | `make run` | `make build`, then `./build/mizrab` | build and run the player |
 | `make test` | `make build`, then `sh tests/run.sh` | golden tests, including the audio engine on the null backend, plus the CLI smoke checks; see [tests](/tests) |
@@ -40,7 +41,7 @@ The two objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.
 | `make fmt` | `salam format` on every `.salam` file in the tree | rewrite every Salam source in place |
 | `make fmt-check` | `salam format --check` on every `.salam` file in the tree | fail if any source would be rewritten |
 
-The file list is derived with `git ls-files --cached --others --exclude-standard '*.salam'`, so a new source file or a new directory needs no `Makefile` edit to be covered; it stops at the `vendor/basalam` submodule and skips ignored files and build output. `salam format` is the authority for style; the conventions are on the [contributing](/contributing) page.
+The file list is derived with `git ls-files --cached --others --exclude-standard '*.salam'`, so a new source file or a new directory needs no `Makefile` edit to be covered; it skips ignored files and build output. `salam format` is the authority for style; the conventions are on the [contributing](/contributing) page.
 
 ## Licence headers
 
