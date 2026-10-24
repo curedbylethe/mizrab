@@ -160,7 +160,7 @@ It needs `make build` first, because it links `build/miniaudio.o` and `build/ma_
 | Tick period | 5 ms |
 | Runs | 12 |
 | Minimum | 66 ms |
-| Median | 93 ms |
+| Median | 91 ms |
 | Maximum | 101 ms |
 
 The runs, in order, as `gap_ms`: 74, 92, 66, 90, 66, 94, 101, 100, 96, 77, 70, 96. Each run printed `backend=Core Audio` before its `gap_ms=` line. The spread is real: the number depends on the machine's scheduling and audio stack, so treat it as a range for this host, and re-run the command rather than quote a single value.
