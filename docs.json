@@ -33,6 +33,12 @@
           "playback-controller",
           "spike-miniaudio"
         ]
+      },
+      {
+        "group": "Library",
+        "pages": [
+          "library"
+        ]
       }
     ],
     "global": {
