@@ -1,0 +1,190 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The config file is an INI subset, and this comment is where the decision and
+// the alternatives that lost are recorded.
+//
+//   # comment        ; comment        a blank line changes nothing
+//   [library]                         opens the section `library`
+//   index = /x/i.json                 sets `library.index` in that section
+//
+// A value is taken literally after trimming: no quotes, no inline comments, no
+// escapes, no continuation lines, so what the file says is exactly the value.
+// Every line that is none of the four shapes is an error with its line number;
+// a duplicate key is not an error and the last one wins.
+//
+// Why this and not the alternatives:
+//
+//   JSON lost on comments. It cannot hold one, so the required commented sample
+//   file is impossible.
+//   TOML lost on errors. `encoding/toml.DecodeStrict` returns only `ok`, so
+//   naming a line would need a second parsing pass, and there is no flattening
+//   helper: a dependency paid for less.
+//   `std/config.ParseINI` lost on errors. It silently skips a malformed line and
+//   returns no line at all (`std/config/config.salam:179`), so it cannot say
+//   where the mistake is, which is the whole criterion.
+//
+// So the reader is ours, over `str` alone, and the line number is the loop
+// index. v1 has two keys, and only two:
+//
+//   library.index   the index file path, absolute, or empty to use the data
+//                   directory (`IndexFile`). No `~` expansion: used as written.
+//   library.roots   comma-separated scan roots, each trimmed; an empty entry is
+//                   an error.
+//
+// Reading never writes: a missing file is an error the caller reports, and no
+// directory or default file is created. Precedence is defaults < file < flag,
+// and a level counts as present when it is non-empty, so `Settings` needs no
+// presence flags.
+
+package config
+
+import conv
+import filepath
+import io
+import os
+import str
+
+@en "Settings"
+/// What the config file and the flags together can set. Empty means unset, so
+/// `Resolve` needs no presence flags: empty roots and an empty index path are
+/// the defaults, and their meaning is the caller's to decide.
+pub struct Settings:
+    pub roots: Vector<str> = Vector {} as Vector<str>
+    pub indexPath: str = ""
+end
+
+@en "LoadError"
+/// Why a config file was rejected. `text` is "" on success; otherwise it is one
+/// sentence the CLI can print and `line` is the 1-based line that caused it, or
+/// 0 when the file itself could not be read.
+pub struct LoadError:
+    pub line: int = 0
+    pub text: str = ""
+end
+
+@en "Defaults"
+/// The settings with no config file and no flags: no roots and no index path.
+/// The sample file loads to exactly this.
+pub func Defaults(): Settings:
+    ret Settings {}
+end
+
+@en "Parse"
+/// Reads INI-subset `text` into `Settings`. Fills `problem` and returns the zero
+/// `Settings` on the first bad line, so a caller never sees a half-filled
+/// result. Touches no file.
+pub func Parse(text: str, problem &: LoadError): Settings:
+    mut out := Settings {}
+    mut section := ""
+    lines := text.split("\n")
+    repeat lines.len() in i:
+        n := i + 1
+        line := str.Trim(lines[i])
+        mut head := ""
+        if line.len() > 0: head = line.substr(0, 1) end
+        // Blank and comment lines are the only ones that change nothing.
+        if head != "" and head != "#" and head != ";":
+            if head == "[" and str.EndsWith(line, "]"):
+                section = str.Trim(line.substr(1, line.len() - 2))
+                if section != "library":
+                    problem = LoadError { line = n, text = "unknown section '" + section + "'" }
+                    ret Settings {}
+                end
+            else:
+                at := str.IndexOf(line, "=")
+                if at <= 0:
+                    problem = LoadError { line = n, text = "expected 'key = value'" }
+                    ret Settings {}
+                end
+                key := str.Trim(line.substr(0, at))
+                val := str.Trim(line.substr(at + 1, line.len() - at - 1))
+                if section == "":
+                    problem = LoadError { line = n, text = "unknown key '" + key + "' outside a section" }
+                    ret Settings {}
+                end
+                full := section + "." + key
+                if full == "library.index":
+                    if val != "" and filepath.IsAbs(val) == false:
+                        problem = LoadError { line = n, text = "library.index must be an absolute path" }
+                        ret Settings {}
+                    end
+                    out.indexPath = val
+                else full == "library.roots":
+                    parts := str.Split(val, ",")
+                    repeat parts.len() in j:
+                        part := str.Trim(parts[j])
+                        if part == "":
+                            problem = LoadError {
+                                line = n, text = "library.roots entry " + conv.FormatInt((j + 1) as i64) + " is empty",
+                            }
+                            ret Settings {}
+                        end
+                        out.roots.push(part)
+                    end
+                else:
+                    problem = LoadError { line = n, text = "unknown key '" + full + "' in [" + section + "]" }
+                    ret Settings {}
+                end
+            end
+        end
+    end
+    ret out
+end
+
+@en "LoadFile"
+/// `Parse` of the file at `path`. A file that cannot be opened fills `problem`
+/// with `line = 0` and returns the zero `Settings`: a read failure is an error,
+/// not a crash. Reads that file and nothing else; creates nothing, and does not
+/// check that a path the file names exists.
+pub func LoadFile(path: str, problem &: LoadError): Settings:
+    f := os.Open(path, "rb")
+    if f == null:
+        problem = LoadError { line = 0, text = "cannot read '" + path + "'" }
+        ret Settings {}
+    end
+    text := io.ReadAll(f)
+    io.Close(f)
+    ret Parse(text, problem)
+end
+
+@en "Resolve"
+/// The settings in effect: `d`, with each level above it overriding only the
+/// fields it sets, so `cli` beats `file` beats `d`. A level is present when it
+/// is non-empty, which is why nothing is lost by a level that sets one field and
+/// leaves the other to the level below it.
+pub func Resolve(d: Settings, file: Settings, cli: Settings): Settings:
+    mut out := d
+    if file.roots.len() > 0:
+        out.roots = file.roots
+    end
+    if cli.roots.len() > 0:
+        out.roots = cli.roots
+    end
+    if file.indexPath != "":
+        out.indexPath = file.indexPath
+    end
+    if cli.indexPath != "":
+        out.indexPath = cli.indexPath
+    end
+    ret out
+end
+
+@en "Describe"
+/// The one-line form of a `LoadError` for the CLI: `<path>:<line>: <text>`,
+/// which is the shape a compiler and every other tool prints.
+pub func Describe(path: str, e: LoadError): str:
+    ret path + ":" + conv.FormatInt(e.line as i64) + ": " + e.text
+end

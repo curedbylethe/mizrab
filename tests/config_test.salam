@@ -1,0 +1,174 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the config reader: the sample the repository ships loads with no error
+// and equals the defaults, both keys parse with roots split on `,` and trimmed,
+// and every rejection names its line — a line that is none of the four shapes,
+// an unknown key, an unknown section, a key outside a section, a relative index
+// path and an empty roots entry. Then a duplicate key (last wins, not an error),
+// a missing file as an error with no half-filled settings, Describe's shape, and
+// precedence defaults < file < flag.
+
+import io
+import os
+import testing
+
+include "../config/config.salam"
+
+// Scratch directory for the file-level test: inside build/, never $HOME.
+dir := "../build/tests/config"
+
+func same(got: config.Settings, want: config.Settings):
+    testing.AssertEqInt(got.roots.len(), want.roots.len())
+    repeat got.roots.len() in i:
+        testing.AssertEqStr(got.roots[i], want.roots[i])
+    end
+    testing.AssertEqStr(got.indexPath, want.indexPath)
+end
+
+func rootsOf(one: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(one)
+    ret v
+end
+
+func settingsOf(indexPath: str, roots: Vector<str>): config.Settings:
+    mut s := config.Defaults()
+    s.indexPath = indexPath
+    s.roots = roots
+    ret s
+end
+
+// Parses `text` expecting a rejection on `line`, and returns the sentence.
+func reject(text: str, line: int): str:
+    mut e := config.LoadError {}
+    got := config.Parse(text, e)
+    testing.AssertEqInt(e.line, line)
+    testing.AssertEqInt(got.roots.len(), 0)
+    testing.AssertEqStr(got.indexPath, "")
+    ret e.text
+end
+
+// The shipped sample is the documentation and a test input at once: it must load
+// without an error and change nothing, or it is lying about the defaults.
+func sampleTests:
+    mut e := config.LoadError {}
+    got := config.LoadFile("../config/config.sample.ini", e)
+    testing.AssertEqInt(e.line, 0)
+    testing.AssertEqStr(e.text, "")
+    same(got, config.Defaults())
+    testing.AssertEqInt(got.roots.len(), 0)
+    testing.AssertEqStr(got.indexPath, "")
+    // Loading cannot see a deleted comment, so the keys the file documents are
+    // pinned as text as well: dropping one fails here, not only at review.
+    text := io.ReadFile("../config/config.sample.ini")
+    testing.AssertContains(text, "\n# index =")
+    testing.AssertContains(text, "\n# roots =")
+end
+
+func valueTests:
+    mut e := config.LoadError {}
+    got := config.Parse("# both keys, values padded\n\n[library]\nroots = /music , /more\nindex = /m/i.json\n", e)
+    testing.AssertEqStr(e.text, "")
+    testing.AssertEqInt(got.roots.len(), 2)
+    testing.AssertEqStr(got.roots[0], "/music")
+    testing.AssertEqStr(got.roots[1], "/more")
+    testing.AssertEqStr(got.indexPath, "/m/i.json")
+
+    // Seconds of two roots, no padding: each entry keeps its own text.
+    plain := config.Parse("[library]\nroots = /a, /b\n", e)
+    testing.AssertEqStr(plain.roots[1], "/b")
+
+    // A duplicate key is documented as last-wins, not as an error.
+    dup := config.Parse("[library]\nindex = /a.json\nindex = /b.json\n", e)
+    testing.AssertEqStr(e.text, "")
+    testing.AssertEqStr(dup.indexPath, "/b.json")
+
+    // An empty value is a legitimate "use the data directory", not an error.
+    unset := config.Parse("[library]\nindex =\n", e)
+    testing.AssertEqStr(e.text, "")
+    testing.AssertEqStr(unset.indexPath, "")
+end
+
+func rejectTests:
+    // Line 5 counts the comment, the blank line and the two good lines above it.
+    testing.AssertEqStr(
+        reject("# comment\n\n[library]\nindex = /a.json\nnot a setting\n", 5),
+        "expected 'key = value'",
+    )
+    testing.AssertEqStr(reject("# comment\n[library]\nrooot = /x\n", 3), "unknown key 'library.rooot' in [library]")
+    testing.AssertEqStr(reject("[playback]\nvolume = 5\n", 1), "unknown section 'playback'")
+    testing.AssertEqStr(reject("index = /a.json\n", 1), "unknown key 'index' outside a section")
+    testing.AssertEqStr(
+        reject("[library]\nindex = relative/path.json\n", 2),
+        "library.index must be an absolute path",
+    )
+    testing.AssertEqStr(reject("[library]\nroots = /a,,/b\n", 2), "library.roots entry 2 is empty")
+end
+
+func describeTests:
+    testing.AssertEqStr(
+        config.Describe("/x/c.ini", config.LoadError { line = 3, text = "expected 'key = value'" }),
+        "/x/c.ini:3: expected 'key = value'",
+    )
+    // A read failure has line 0 and keeps both separators, so the CLI prints
+    // the same shape for it.
+    testing.AssertEqStr(config.Describe("/x/c.ini", config.LoadError {}), "/x/c.ini:0: ")
+end
+
+func fileTests:
+    // An absent file is an error with no line and no half-filled settings, and
+    // reading it creates nothing.
+    testing.AssertFalse(os.Exists(dir + "/absent.ini"))
+    mut e := config.LoadError {}
+    got := config.LoadFile(dir + "/absent.ini", e)
+    testing.AssertEqInt(e.line, 0)
+    testing.AssertTrue(e.text != "")
+    testing.AssertContains(e.text, "absent.ini")
+    testing.AssertEqInt(got.roots.len(), 0)
+    testing.AssertEqStr(got.indexPath, "")
+    testing.AssertFalse(os.Exists(dir + "/absent.ini"))
+end
+
+func precedenceTests:
+    d := config.Defaults()
+    file := settingsOf("/file/index.json", rootsOf("/file/music"))
+    cli := settingsOf("/cli/index.json", rootsOf("/cli/music"))
+
+    // No file, no flag: the defaults survive.
+    same(config.Resolve(d, config.Defaults(), config.Defaults()), d)
+    // A file beats the defaults, and a flag beats the file.
+    same(config.Resolve(d, file, config.Defaults()), file)
+    same(config.Resolve(d, file, cli), cli)
+    // A file that sets only the index leaves roots to the flag above it.
+    onlyIndex := settingsOf("/file/index.json", Vector {} as Vector<str>)
+    got := config.Resolve(d, onlyIndex, settingsOf("", rootsOf("/cli/music")))
+    testing.AssertEqStr(got.indexPath, "/file/index.json")
+    testing.AssertEqInt(got.roots.len(), 1)
+    testing.AssertEqStr(got.roots[0], "/cli/music")
+end
+
+func main:
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    sampleTests()
+    valueTests()
+    rejectTests()
+    describeTests()
+    fileTests()
+    precedenceTests()
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end
