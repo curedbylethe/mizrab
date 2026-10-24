@@ -1,0 +1,167 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives ui.Vim through a headless screen: the four preset directions, the
+// preset keys the app relies on (Tab, the arrows, "/") and the four keys mizrab
+// binds itself. Dispatch is the production path (widget first, then the keymap),
+// and no terminal is touched because start() is never called.
+
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../ui/ui.salam"
+
+// The verbs the sink received. A package global because a lambda captures by
+// value: a captured local Vector would be a copy and would stay empty.
+mut sinkHits := Vector {} as Vector<ui.Command>
+
+// The screen root: unfocusable, so each test decides what holds the focus.
+struct Root:
+    pub use basalam.BaseWidget
+end
+
+// A focusable widget with no behavior; only its focusability and ID matter.
+struct Field:
+    pub use basalam.BaseWidget
+    pub focus: bool = true
+
+    pub func focusable(): bool:
+        ret this.focus
+    end
+end
+
+// The keymap with every reported verb appended to the global sink. The
+// callback is a lambda because a named function cannot be passed as a value.
+func vim(): basalam.Keymap:
+    ret ui.Vim((command: ui.Command): sinkHits.push(command) end)
+end
+
+// One decoded key press, the shape dispatch consumes.
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+func rect(x: int, y: int, width: int, height: int): basalam.Rect:
+    ret basalam.Rect { x = x, y = y, width = width, height = height }
+end
+
+// The 2x2 grid the focus moves need, so h/j/k/l have real geometry:
+//
+//     a(1) b(2)          ids 1, 2 on row 0
+//     c(3) d(4)          ids 3, 4 on row 1
+//
+// Right is 1->2, down is 2->4, left is 2->1, up is 3->1.
+func grid(): basalam.Screen:
+    mut s := basalam.NewScreen(Root {}, 8, 3)
+    a := s.add(basalam.RootId, Field {})
+    b := s.add(basalam.RootId, Field {})
+    c := s.add(basalam.RootId, Field {})
+    d := s.add(basalam.RootId, Field {})
+    s.widget(a).set_bounds(rect(0, 0, 4, 1))
+    s.widget(b).set_bounds(rect(4, 0, 4, 1))
+    s.widget(c).set_bounds(rect(0, 1, 4, 1))
+    s.widget(d).set_bounds(rect(4, 1, 4, 1))
+    ret s
+end
+
+// The four vim directions the preset owns move the focus and report nothing.
+func test_preset_hjkl_moves_focus():
+    mut s := grid()
+    defer s.close()
+    sinkHits.clear()
+    s.set_keymap(vim())
+
+    testing.AssertTrue(s.focus(1))
+    testing.AssertTrue(s.dispatch(key("j"))) // Down: a(1) -> c(3)
+    testing.AssertEqInt(s.focused_id(), 3)
+    testing.AssertTrue(s.dispatch(key("k"))) // Up: c(3) -> a(1)
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertTrue(s.dispatch(key("l"))) // Right: a(1) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("h"))) // Left: b(2) -> a(1)
+    testing.AssertEqInt(s.focused_id(), 1)
+    testing.AssertEqInt(sinkHits.len(), 0)
+end
+
+// The preset is a superset of the default map: Tab and the arrows still work.
+func test_preset_keeps_tab_and_arrows():
+    mut s := grid()
+    defer s.close()
+    s.set_keymap(vim())
+    testing.AssertTrue(s.focus(1))
+
+    testing.AssertTrue(s.dispatch(key("\t"))) // Tab: a(1) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+    testing.AssertTrue(s.dispatch(key("\x1b[B"))) // Down: b(2) -> d(4)
+    testing.AssertEqInt(s.focused_id(), 4)
+    testing.AssertTrue(s.dispatch(key("\x1b[A"))) // Up: d(4) -> b(2)
+    testing.AssertEqInt(s.focused_id(), 2)
+end
+
+// "/" reaches the application through the hook Vim hands the preset.
+func test_preset_slash_opens_search():
+    mut s := grid()
+    defer s.close()
+    sinkHits.clear()
+    s.set_keymap(vim())
+    testing.AssertTrue(s.focus(1))
+
+    testing.AssertTrue(s.dispatch(key("/")))
+    testing.AssertEqInt(sinkHits.len(), 1)
+    testing.AssertTrue(sinkHits.get(0) == ui.Command.OpenSearch)
+end
+
+// The four keys mizrab binds dispatch true and report exactly their verb, in
+// order; the sink holds four verbs after four keys.
+func test_app_keys_report_their_verbs():
+    mut s := grid()
+    defer s.close()
+    sinkHits.clear()
+    s.set_keymap(vim())
+    testing.AssertTrue(s.focus(1))
+
+    testing.AssertTrue(s.dispatch(key(" ")))
+    testing.AssertTrue(s.dispatch(key("n")))
+    testing.AssertTrue(s.dispatch(key("p")))
+    testing.AssertTrue(s.dispatch(key(":")))
+
+    testing.AssertEqInt(sinkHits.len(), 4)
+    testing.AssertTrue(sinkHits.get(0) == ui.Command.PlayPause)
+    testing.AssertTrue(sinkHits.get(1) == ui.Command.Next)
+    testing.AssertTrue(sinkHits.get(2) == ui.Command.Prev)
+    testing.AssertTrue(sinkHits.get(3) == ui.Command.OpenCommandLine)
+end
+
+// An unbound key is not consumed and reports nothing.
+func test_unbound_key_is_unconsumed():
+    mut s := grid()
+    defer s.close()
+    sinkHits.clear()
+    s.set_keymap(vim())
+    testing.AssertTrue(s.focus(1))
+
+    testing.AssertFalse(s.dispatch(key("z")))
+    testing.AssertEqInt(sinkHits.len(), 0)
+end
+
+func main(): int:
+    test_preset_hjkl_moves_focus()
+    test_preset_keeps_tab_and_arrows()
+    test_preset_slash_opens_search()
+    test_app_keys_report_their_verbs()
+    test_unbound_key_is_unconsumed()
+    ret testing.Summary()
+end
