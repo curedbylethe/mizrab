@@ -129,5 +129,68 @@ else
     echo "ok   cli: --nope"
 fi
 
+# --scan runs the whole path headless. Roots are tests/fixtures (the harness has
+# cd'd into tests/); every index goes under $OUT so nothing touches $HOME or the
+# repository.
+rm -f "$OUT/scan-a.json" "$OUT/scan-b.json"
+"$BIN" --scan fixtures --index "$OUT/scan-a.json" > "$OUT/cli-scan-a.stdout" 2>&1
+code=$?
+if [ "$code" -ne 0 ]; then
+    echo "FAIL cli: --scan (exit $code)"
+    fail=$((fail + 1))
+elif ! grep -q "^mizrab: scanned " "$OUT/cli-scan-a.stdout"; then
+    echo "FAIL cli: --scan (no summary line)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: --scan"
+fi
+
+# Rerun on the same index: nothing to read, nothing changes. A scan into a fresh
+# file must still produce the same bytes.
+/bin/cp -f "$OUT/scan-a.json" "$OUT/scan-a.first"
+"$BIN" --scan fixtures --index "$OUT/scan-a.json" > "$OUT/cli-scan-b.stdout" 2>&1
+code=$?
+if [ "$code" -ne 0 ]; then
+    echo "FAIL cli: --scan rerun (exit $code)"
+    fail=$((fail + 1))
+elif ! grep -q "0 added, 0 updated, 0 removed" "$OUT/cli-scan-b.stdout"; then
+    echo "FAIL cli: --scan rerun (not '0 added, 0 updated, 0 removed')"
+    fail=$((fail + 1))
+elif ! cmp -s "$OUT/scan-a.first" "$OUT/scan-a.json"; then
+    echo "FAIL cli: --scan rerun (index changed on rerun)"
+    fail=$((fail + 1))
+elif ! "$BIN" --scan fixtures --index "$OUT/scan-b.json" > "$OUT/cli-scan-c.stdout" 2>&1 \
+    || ! cmp -s "$OUT/scan-a.json" "$OUT/scan-b.json"; then
+    echo "FAIL cli: --scan rerun (fresh index differs from first)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: --scan rerun"
+fi
+
+if ! grep -q '"schema": 1' "$OUT/scan-a.json"; then
+    echo "FAIL cli: --scan index (no '\"schema\": 1')"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: --scan index"
+fi
+
+"$BIN" --scan /nonexistent-path-for-mizrab --index "$OUT/scan-missing.json" > "$OUT/cli-scan-missing.stdout" 2>&1
+code=$?
+if [ "$code" -ne 1 ]; then
+    echo "FAIL cli: --scan missing root (exit $code, want 1)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: --scan missing root"
+fi
+
+"$BIN" --scan --index "$OUT/scan-none.json" > "$OUT/cli-scan-none.stdout" 2>&1
+code=$?
+if [ "$code" -ne 2 ]; then
+    echo "FAIL cli: --scan no root (exit $code, want 2)"
+    fail=$((fail + 1))
+else
+    echo "ok   cli: --scan no root"
+fi
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
