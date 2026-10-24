@@ -11,6 +11,8 @@ Four 440 Hz sine tones (amplitude 0.5 full scale), one per decoder format, each 
 
 The lossy files decode a little shorter than 1.5 s (encoder trimming); tests must not assert exact frame counts for MP3 or OGG. Vorbis has no known length in miniaudio, so `LengthKnown` is false for `tone.ogg`. After conversion to 48 kHz every file yields well over 4800 frames, and the WAV yields 72000, so seeking to frame 24000 is valid.
 
+`link-tone.flac` is not audio: it is a committed symlink to `tone.flac`, the fixture for the library scanner's symlink policy. Do not feed it to a decoder test.
+
 ## Provenance
 
 Generated once on macOS (Darwin, 2026-10-23) with only stock tools: Python 3 stdlib and `afconvert` (FLAC). No local `ffmpeg`, `lame`, `flac`, `oggenc` or `sox` exists, and `afconvert` cannot encode MP3 or Vorbis, so VLC 3.0.20's bundled libmp3lame / libvorbis encoders produced those two. The sha256 values above are authoritative: encoder output is not guaranteed byte-identical across runs or VLC versions, so do not regenerate casually.
