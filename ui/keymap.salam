@@ -1,0 +1,64 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The keymap: basalam's vim preset plus the four keys the library leaves to the
+// application. Focus movement (h/j/k/l, Tab, the arrows, gg, G) and "/" belong
+// to the preset; space, n, p and : are bound here and report the verbs below
+// through the caller's sink, so the map knows no player and no screen.
+
+import term
+import "github.com/curedbylethe/basalam/basalam"
+
+@en "Command"
+/// A verb the interface asks the application to perform. The four focus moves
+/// are performed inside basalam's preset and are never reported to the sink;
+/// they are named here so the command layer has one vocabulary.
+pub enum Command:
+    FocusLeft
+    FocusDown
+    FocusUp
+    FocusRight
+    PlayPause
+    Next
+    Prev
+    OpenSearch
+    OpenCommandLine
+end
+
+@en "Vim"
+/// Builds the vim-ish keymap: basalam's vim preset, with space, n, p and :
+/// added. "/" and the four focus moves come from the preset. `sink` receives
+/// every verb the map acts on; the install keeps ownership of the returned map
+/// (`set_keymap` frees it), so the caller must not free it afterward.
+pub func Vim(sink: func (Command)): basalam.Keymap:
+    search := (screen: basalam.Screen*, event: basalam.Event):
+        sink(Command.OpenSearch)
+        ret true
+    end
+    mut km := basalam.NewVimKeymap(search)
+    km.bind(
+        term.Decode(" "), (screen: basalam.Screen*, event: basalam.Event): sink(Command.PlayPause) ret true end
+    )
+    km.bind(
+        term.Decode("n"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Next) ret true end
+    )
+    km.bind(
+        term.Decode("p"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Prev) ret true end
+    )
+    km.bind(
+        term.Decode(":"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.OpenCommandLine) ret true end
+    )
+    ret km
+end

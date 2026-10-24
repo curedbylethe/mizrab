@@ -1,0 +1,26 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The terminal interface: the keymap the app binds and, later, the screen it
+// installs it on. Package ui is every ui/*.salam file merged; this file is the
+// entry point. It holds no code of its own.
+//
+//   keymap.salam  Command, and Vim(sink): the basalam vim preset plus the four
+//                 application keys (space, n, p, :)
+//
+// Imports basalam and nothing from the player: the keymap reports verbs to a
+// callback, so the interface layer does not know what playback is.
+
+package ui
