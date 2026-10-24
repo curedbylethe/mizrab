@@ -18,6 +18,7 @@ import flag
 import os
 
 include "commands/commands.salam"
+include "config/config.salam"
 include "library/library.salam"
 
 link static "build/miniaudio.o"
@@ -61,7 +62,11 @@ func main:
         end
         mut indexPath := flag.GetStr(f, "index")
         if indexPath == "":
-            indexPath = library.DefaultIndexPath()
+            indexPath = config.IndexFile(config.FromEnv())
+            if indexPath == "":
+                println "mizrab: cannot find a data directory; pass --index"
+                ret 2
+            end
         end
         mut count := library.ScanCount {}
         if library.Scan(roots, indexPath, count) != 0:
