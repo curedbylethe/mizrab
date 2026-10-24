@@ -49,7 +49,7 @@ The miniaudio and stb_vorbis sources are public domain or MIT-0 (stb_vorbis: MIT
 
 ### Bumping a pin
 
-1. **Salam compiler.** Edit `.salam-version` and the `salam` floor in `salam.toml` in the same commit. `.salam-version` was the only place the version appeared, and it no longer is: `salam.toml`'s `salam = ">=X.Y.Z"` floor names a compiler version too, and moving one without the other leaves the tree half-bumped. The `Makefile` reads `.salam-version`, and CI asserts that `salam version` matches it.
+1. **Salam compiler.** Edit `.salam-version` and the `salam` floor in `salam.toml`, and move the `audio.flac` and `audio.tag` entries there with `salam add audio.flac@vX.Y.Z audio.tag@vX.Y.Z`, all in the same commit: the audio packages are released with the compiler, so they carry its version. `.salam-version` was the only place the version appeared, and it no longer is: `salam.toml`'s `salam = ">=X.Y.Z"` floor names a compiler version too, and moving one without the other leaves the tree half-bumped. The `Makefile` reads `.salam-version`, and CI asserts that `salam version` matches it.
 2. **basalam.** Take the release from the registry, which writes the manifest and the lock:
    ```sh
    salam add github.com/curedbylethe/basalam@vX.Y.Z

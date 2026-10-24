@@ -61,8 +61,10 @@ make run
 At this commit `make run` prints the usage block, which lists `--version`,
 `--scan`, `--index` and `--help`; a bare `./build/mizrab` prints the same block
 and exits 0. `./build/mizrab --scan ~/Music` scans a library and prints a
-one-line summary. `make build` also compiles the vendored miniaudio and the C
-glue first and links them into the binary.
+one-line summary. `make build` first runs `salam deps`, which downloads the
+packages `salam.lock` pins and checks their sha256 sums, so the first build
+needs network access; it then compiles the vendored miniaudio and the C glue
+and links them into the binary.
 
 ## Build and run
 
