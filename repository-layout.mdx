@@ -12,17 +12,18 @@ mizrab is one Salam program plus the audio engine and the vendored C it drives, 
 
 | Path | Contents |
 | --- | --- |
-| `main.salam` | Entry point: flag parsing, `--version`, `--help`, `--scan` with `--index`, and the usage block |
+| `main.salam` | Entry point: flag parsing, `--version`, `--help`, `--scan` with `--index`, `--config`, and the usage block |
 | `commands/` | Command layer: the version constant and the usage string |
 | `audio/` | Vendored miniaudio and stb_vorbis plus the decode/ring/device engine: `miniaudio.h`, `stb_vorbis.c` and the `miniaudio.c` implementation unit that includes both; the C glue `ma_shim.{h,c}`; and the Salam package `audio` (`audio.salam` entry file, `decoder.salam`, `ring.salam`, `metrics.salam`, `device.salam`). See [the audio engine](/audio-engine) |
 | `player/` | The playback controller on top of the engine: the Salam package `player` (`player.salam` entry file, `state.salam`, `errors.salam`, `controller.salam`, `queue.salam`): the state machine, the queue and the controller. See [the playback controller](/playback-controller) |
 | `library/` | The library scanner: the Salam package `library` (`library.salam` entry file, `walk.salam`, `track.salam`, `ogg.salam`, `index.salam`, `scan.salam`) and the C shim `library_shim.{h,c}` that does `lstat` and the binary head read. See [the library](/library) |
-| `config/` | Reserved for configuration loading; holds only `.gitkeep` |
-| `ui/` | Reserved for the basalam-based terminal interface; holds only `.gitkeep` |
-| `tests/` | The `*_test.salam` programs with their `.out` goldens (`cli`, `ring`, `decode`, `engine`, `state`, `player`, `queue`, `library_shim`, `walk`, `tags`, `ogg`, `index`, `rescan`, `unicode`), the `run.sh` harness, the `soak.salam` / `soak.sh` pair behind `make soak`, the `gap.salam` / `gap.sh` pair that measures the inter-track gap by hand, `unicode_probe.salam`, which prints the table `unicode_test` asserts, and `fixtures/`, the audio files with their provenance: one small tone per decoder format plus the tagged and packet-split files the scanner tests read |
+| `config/` | Where mizrab keeps its files: the Salam package `config` (`config.salam` entry file and its XDG directory resolver, `settings.salam` with the INI-subset reader, `Settings`, `Resolve` and `Describe`) and `config.sample.ini`, the commented sample a test loads. See [configuration](/configuration) |
+| `ui/` | The terminal interface: the Salam package `ui` (`ui.salam` entry file, `keymap.salam`): `Command` and `Vim`, which returns basalam's vim preset plus four bindings. The binary does not include it yet |
+| `tests/` | The `*_test.salam` programs with their `.out` goldens (`cli`, `ring`, `decode`, `engine`, `state`, `player`, `queue`, `library_shim`, `walk`, `tags`, `ogg`, `index`, `rescan`, `paths`, `config`, `keymap`, `unicode`), the `run.sh` harness, the `soak.salam` / `soak.sh` pair behind `make soak`, the `gap.salam` / `gap.sh` pair that measures the inter-track gap by hand, `unicode_probe.salam`, which prints the table `unicode_test` asserts, and `fixtures/`, the audio files with their provenance: one small tone per decoder format plus the tagged and packet-split files the scanner tests read |
 | `salam.toml`, `salam.lock` | The Salam manifest and its lock: the compiler floor, and the three pinned packages (`audio.flac`, `audio.tag`, basalam) with their commits and sha256 sums |
 | `index.mdx` | Site page: introduction, status and what mizrab is built on |
 | `install.mdx` | Site page: prerequisites, clone, build and run |
+| `configuration.mdx` | Site page: where mizrab keeps files, the config file, precedence, errors and the keymap |
 | `make-targets.mdx` | Site page: the full make target reference |
 | `tests.mdx` | Site page: the test harness convention and how to add a test |
 | `repository-layout.mdx` | Site page: this page |
@@ -41,7 +42,7 @@ mizrab is one Salam program plus the audio engine and the vendored C it drives, 
 | `LICENSE` | The full GPL-3.0-or-later text |
 | `.github/workflows/ci.yml` | CI: the Salam pin, `make check` (which runs `make fmt-check`, `make build` and `make test`, including the engine test on the null backend) on Ubuntu and macOS, plus the docs job that runs `make docs-format-check` and `make docs-check` |
 
-`config/` and `ui/` are reserved and empty apart from a `.gitkeep` each. Nothing in the current build reads them.
+The binary reads `config/` at startup: it resolves the four directories and loads `config.ini` when one exists. `ui/` is a declaration package that the binary does not include: it is where the basalam-based interface will live, and today it holds the keymap only.
 
 Playback is split across two directories. `audio/` is the substrate: decoding, the ring buffer and the device. `player/` sits above it: the playback state machine, the commands and the queue. The binary does not include `player/` yet; the tests do.
 
