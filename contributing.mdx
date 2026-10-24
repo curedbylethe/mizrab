@@ -39,7 +39,7 @@ mizrab has exactly six pins. Each pin lives in one file; the table repeats the c
 | Pin | Where it lives | Current value |
 | --- | --- | --- |
 | Salam compiler | `.salam-version` | `0.5.9` |
-| basalam | `salam.toml` + `salam.lock` | `v0.3.1`, commit `280eda3e566781625a0a3ec30cdda611ef050de0`, sha256 `fdc61c46f06848e23e7194ee7498d6008788c1297e9686ec38639956e18bdb40` |
+| basalam | `salam.toml` + `salam.lock` | `v0.3.2`, commit `00402caed2997e0013f06fb7b3dd4393e1d6d3e0`, sha256 `abc016e9cb1a0f89a77cd812df980cff8e6db8752cf182110703790d2f957fae` |
 | miniaudio | `audio/miniaudio.h` + `audio/miniaudio.c` | `0.11.25` from the [0.11.25 release](https://github.com/mackron/miniaudio/releases/tag/0.11.25); sha256 `ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89` (`.h`, byte-identical to the release). `audio/miniaudio.c` is not an upstream file: it is the local implementation unit (an explanatory comment, `#include "stb_vorbis.c"`, then `#define MINIAUDIO_IMPLEMENTATION` and `#include "miniaudio.h"`), sha256 `28fe605baef2b757efc79b65123ed7384d38dbf923bec000616b9880ec8242eb` |
 | stb_vorbis | `audio/stb_vorbis.c` | `nothings/stb` commit `1ee679ca2ef753a528db5ba6801e1067b40481b8` (2021-07-12, the latest commit to touch the file; upstream publishes no tags), from [`stb_vorbis.c` at that commit](https://github.com/nothings/stb/blob/1ee679ca2ef753a528db5ba6801e1067b40481b8/stb_vorbis.c); sha256 `4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636` |
 | Mintlify CLI | `.mint-version` | `4.2.988` |
