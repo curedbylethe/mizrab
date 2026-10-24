@@ -22,9 +22,7 @@
 
 package library
 
-import filepath
 import os
-import os.user
 import sort
 import str
 
@@ -107,21 +105,6 @@ pub func MergeScan(prev: Index, walked: Vector<Entry>, fresh: Vector<Track>): In
     end
     byPath(idx.tracks)
     ret idx
-end
-
-@en "DefaultIndexPath"
-/// Where the index lives when the caller names none: $XDG_DATA_HOME/mizrab/index.json,
-/// or ~/.local/share/mizrab/index.json when that is unset or empty. The data
-/// directory, not the cache directory: the index can be rebuilt, but playlists
-/// refer to its track IDs and a cache cleaner deleting it would be a worse
-/// surprise than an unusual location. Pass an explicit path to use the cache
-/// directory instead. Reads the environment only; touches no file.
-pub func DefaultIndexPath(): str:
-    mut base := os.Env("XDG_DATA_HOME")
-    if base == "":
-        base = user.HomeDir().concat("/.local/share")
-    end
-    ret filepath.Join(base, "mizrab/index.json")
 end
 
 @en "Scan"
