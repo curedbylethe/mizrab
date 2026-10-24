@@ -6,8 +6,8 @@ BUILD := build
 BIN := $(BUILD)/mizrab
 ENTRY := main.salam
 # Every Salam source in the tree, derived rather than listed, so a new file or
-# a new directory cannot sit outside fmt-check. `git ls-files` stops at the
-# vendor/basalam submodule and skips build output and ignored files.
+# a new directory cannot sit outside fmt-check. `git ls-files` skips ignored
+# files and build output.
 SOURCES := $(shell git ls-files --cached --others --exclude-standard '*.salam')
 FLAGS := --log-level=warn --backend=llvm
 SALAM_VERSION := $(shell cat .salam-version)
