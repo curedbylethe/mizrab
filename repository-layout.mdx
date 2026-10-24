@@ -38,7 +38,7 @@ mizrab is one Salam program plus the audio engine and the vendored C it drives, 
 | `Makefile` | Every developer task; see [make targets](/make-targets) |
 | `README.md`, `CONTRIBUTING.md` | The GitHub entry points; both link here for the detail |
 | `LICENSE` | The full GPL-3.0-or-later text |
-| `.github/workflows/ci.yml` | CI: the Salam pin, `make fmt-check`, `make build` and `make test` (which includes the engine test on the null backend) on Ubuntu and macOS, plus the docs job that runs `make docs-format-check` and `make docs-check` |
+| `.github/workflows/ci.yml` | CI: the Salam pin, `make check` (which runs `make fmt-check`, `make build` and `make test`, including the engine test on the null backend) on Ubuntu and macOS, plus the docs job that runs `make docs-format-check` and `make docs-check` |
 
 `library/`, `config/` and `ui/` are reserved and empty apart from a `.gitkeep` each. Nothing in the current build reads them.
 

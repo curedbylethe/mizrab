@@ -30,7 +30,7 @@ chore(deps): bump Salam to 0.5.7
 
 - Imperative mood in the subject.
 - One coherent change per commit; no `wip` or `fixes` commits.
-- The tree is green after every commit: `make build && make test && make fmt-check`.
+- The tree is green after every commit: `make check`.
 
 ## Version pins
 
@@ -63,7 +63,7 @@ The miniaudio and stb_vorbis sources are public domain or MIT-0 (stb_vorbis: MIT
 Verify the whole tree on the new pin before committing:
 
 ```sh
-make clean && make build && make test && make fmt-check
+make clean && make check
 ```
 
 Commit as `chore(deps): bump Salam to X`, `chore(deps): bump basalam to vX.Y.Z` or `chore(deps): bump Mintlify CLI to X`, with the new value recorded in the table in the same commit. If a bump breaks the build, that is a finding to report upstream, not a reason to loosen the pin or fall back to `latest`.

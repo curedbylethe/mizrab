@@ -41,16 +41,11 @@ jobs:
           echo "installed=$installed pinned=$pinned"
           test "$installed" = "$pinned"
 
-      - name: make fmt-check
-        run: make fmt-check
-
-      # LLVM strict: an LLVM codegen failure must not fall back to the C
-      # backend, so no step here passes --backend=c or retries on failure.
-      - name: make build
-        run: make build
-
-      - name: make test
-        run: make test
+      # The one gate: fmt-check, build and test, in that order. LLVM strict: an
+      # LLVM codegen failure must not fall back to the C backend, so no step here
+      # passes --backend=c or retries on failure.
+      - name: make check
+        run: make check
 
   docs:
     runs-on: ubuntu-latest

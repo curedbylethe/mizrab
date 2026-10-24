@@ -27,7 +27,8 @@ you need to override it, export your own value before running `make`.
 
 - `make fmt` formats the Salam sources; `make fmt-check` fails if any would be
   rewritten.
-- `make build && make test && make fmt-check` is the tree-green check.
+- `make check` is the tree-green check: it runs `make fmt-check`, then
+  `make build` and `make test`.
 - `make docs-check` and `make docs-format-check` are the documentation gates.
 
 [Make targets](https://mizrab.mintlify.app/make-targets) documents every target
@@ -90,7 +91,7 @@ chore(deps): bump Salam to 0.5.7
 
 - Imperative mood in the subject.
 - One coherent change per commit; no "wip" or "fixes" commits.
-- The tree is green after every commit: `make build && make test && make fmt-check`.
+- The tree is green after every commit: `make check`.
 
 ## Version pins and the bump procedure
 
