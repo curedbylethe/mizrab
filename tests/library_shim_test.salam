@@ -1,0 +1,96 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the library shim: lstat on a file, a directory, a symlink and a
+// missing path, and the binary-safe head read. The head read is checked on the
+// FLAC fixture by decoding its STREAMINFO block by hand (rate, channels and
+// total frames sit at fixed bit positions), which proves the buffer holds the
+// real bytes past the first NUL. Short reads at and past the end of the file
+// are results, not errors.
+
+import mem
+import testing
+
+include "../library/library.salam"
+
+link static "../build/library_shim.o"
+
+// The fixture is a stereo 44100 Hz FLAC of 66150 frames, 25237 bytes.
+toneBytes := 25237 as int
+
+// Byte `i` of `p` as an int.
+func byteAt(p: void*, i: int): int:
+    ret (p as u8*)[i] as int
+end
+
+func statTests:
+    tone := library.StatPath("fixtures/tone.flac")
+    testing.AssertTrue(tone.exists)
+    testing.AssertEqInt64(tone.size, toneBytes as i64)
+    testing.AssertTrue(tone.mtimeNs > 0)
+    testing.AssertFalse(tone.isDir)
+    testing.AssertFalse(tone.isLink)
+
+    link := library.StatPath("fixtures/link-tone.flac")
+    testing.AssertTrue(link.exists)
+    testing.AssertTrue(link.isLink)
+    testing.AssertFalse(link.isDir)
+
+    dir := library.StatPath("fixtures")
+    testing.AssertTrue(dir.exists)
+    testing.AssertTrue(dir.isDir)
+    testing.AssertFalse(dir.isLink)
+
+    gone := library.StatPath("fixtures/does-not-exist")
+    testing.AssertFalse(gone.exists)
+    testing.AssertEqInt64(gone.size, 0 as i64)
+    testing.AssertFalse(gone.isLink)
+end
+
+func readTests:
+    buf := mem.AllocateZeroed(library.HeadCap as u64)
+    defer mem.Free(buf)
+
+    got := library.ReadHead("fixtures/tone.flac", 0 as i64, library.HeadCap, buf)
+    testing.AssertEqInt(got, toneBytes)
+    testing.AssertEqInt(byteAt(buf, 0), 102)
+    testing.AssertEqInt(byteAt(buf, 3), 67)
+
+    // STREAMINFO data starts at byte 8; rate, channels and total follow its
+    // 10 bytes of block and frame sizes.
+    rate := (byteAt(buf, 18) << 12) | (byteAt(buf, 19) << 4) | (byteAt(buf, 20) >> 4)
+    channels := ((byteAt(buf, 20) >> 1) & 7) + 1
+    mut total := (byteAt(buf, 21) & 15) as i64
+    mut i := 22
+    until i <= 25:
+        total = (total << 8) | (byteAt(buf, i) as i64)
+        i += 1
+    end
+    testing.AssertEqInt(rate, 44100)
+    testing.AssertEqInt(channels, 2)
+    testing.AssertEqInt64(total, 66150 as i64)
+
+    // Shorter than the file, then a tail that runs off the end, then past it.
+    testing.AssertEqInt(library.ReadHead("fixtures/tone.flac", 0 as i64, 100, buf), 100)
+    testing.AssertEqInt(library.ReadHead("fixtures/tone.flac", (toneBytes - 10) as i64, 100, buf), 10)
+    testing.AssertEqInt(library.ReadHead("fixtures/tone.flac", (toneBytes + 50) as i64, 100, buf), 0)
+    testing.AssertEqInt(library.ReadHead("fixtures/does-not-exist", 0 as i64, 100, buf), -1)
+end
+
+func main:
+    statTests()
+    readTests()
+    ret testing.Summary()
+end

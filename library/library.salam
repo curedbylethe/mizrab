@@ -1,0 +1,81 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The library: what mizrab knows about the music on disk. This file holds the
+// package root and the two filesystem primitives every other file builds on,
+// both backed by the C shim (library_shim.c): a one-call lstat, and a
+// binary-safe read of a bounded head of a file. file.ReadBytes stops at the
+// first NUL byte and file.Stat spawns subprocesses, so neither can do this job.
+//
+// Package library is every library/*.salam file merged. Files in the package:
+//   library.salam   this file: the shim bindings, Stat, StatPath, ReadHead.
+// Each later file adds its name to this list.
+//
+// Every extern below is declared once for the whole package; a second extern
+// of the same name in a sibling file is a redefinition error.
+
+package library
+
+import mem
+
+extern:
+    func mizrab_library_stat(path: str, out: void *): int
+    func mizrab_library_read(path: str, offset: i64, n: int, dst: void *): int
+end
+
+@en "HeadCap"
+/// The most bytes a caller should ask ReadHead for: 256 KiB, enough for any tag
+/// block this package parses and far below the size of a track.
+pub const HeadCap := 262144
+
+@en "Stat"
+/// What lstat says about one path. When exists is false every other field is
+/// at its default. A symlink is reported as a link, never followed: isDir and
+/// isLink describe the link itself. mtimeNs is nanoseconds since the epoch.
+pub struct Stat:
+    pub size: i64 = 0
+    pub mtimeNs: i64 = 0
+    pub isDir: bool = false
+    pub isLink: bool = false
+    pub exists: bool = false
+end
+
+@en "StatPath"
+/// Stats `path` without following a final symlink. A path that cannot be
+/// stat'd (missing, or a parent is not searchable) yields exists == false.
+pub func StatPath(path: str): Stat:
+    mut s := Stat {}
+    out := mem.AllocateZeroed(24 as u64) as i64*
+    defer mem.Free(out as void*)
+    if mizrab_library_stat(path, out as void*) != 0:
+        ret s
+    end
+    s.size = out[0]
+    s.mtimeNs = out[1]
+    s.isDir = (out[2] & 1) != 0
+    s.isLink = (out[2] & 4) != 0
+    s.exists = true
+    ret s
+end
+
+@en "ReadHead"
+/// Reads up to n bytes of `path` starting at `offset` into dst, which the
+/// caller owns and sizes (n bytes at least). Binary-safe: the buffer is raw
+/// bytes, never a str. Returns the number of bytes read, which is short at the
+/// end of the file and 0 past it, or -1 when the file cannot be opened, seeked
+/// or read.
+pub func ReadHead(path: str, offset: i64, n: int, dst: void *): int:
+    ret mizrab_library_read(path, offset, n, dst)
+end
