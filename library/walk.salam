@@ -110,6 +110,9 @@ pub func Walk(root: str): Vector<Entry>:
             end
             mem.Free(full as void*)
         end
+        repeat names.len() in i:
+            mem.Free(names.get(i) as void*)
+        end
         names.free()
         mem.Free(dir as void*)
     end
