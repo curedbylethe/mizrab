@@ -96,6 +96,19 @@ func valueTests:
     testing.AssertEqStr(e.text, "")
     testing.AssertEqStr(dup.indexPath, "/b.json")
 
+    // The same for roots: a second line replaces the first instead of adding to
+    // it, which an append to the result would silently break.
+    twice := config.Parse("[library]\nroots = /a\nroots = /b\n", e)
+    testing.AssertEqStr(e.text, "")
+    testing.AssertEqInt(twice.roots.len(), 1)
+    testing.AssertEqStr(twice.roots[0], "/b")
+
+    // Also when the replaced line held several entries.
+    replaced := config.Parse("[library]\nroots = /a, /b\nroots = /c\n", e)
+    testing.AssertEqStr(e.text, "")
+    testing.AssertEqInt(replaced.roots.len(), 1)
+    testing.AssertEqStr(replaced.roots[0], "/c")
+
     // An empty value is a legitimate "use the data directory", not an error.
     unset := config.Parse("[library]\nindex =\n", e)
     testing.AssertEqStr(e.text, "")
