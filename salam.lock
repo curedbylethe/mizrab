@@ -1,0 +1,17 @@
+# Written by salam add, remove and update. Do not edit by hand.
+
+[[package]]
+path = "audio.flac"
+version = "v0.5.9"
+sum = "sha256:e83906e0f407684ac2621792664de4ebf4c5de45a3a09f841ee35fe636ac3eed"
+
+[[package]]
+path = "audio.tag"
+version = "v0.5.9"
+sum = "sha256:708386ebfe8e23fe2b586603097ce03034df108914dd4749b6b2c1e2df1aa235"
+
+[[package]]
+path = "github.com/curedbylethe/basalam"
+version = "v0.3.1"
+commit = "280eda3e566781625a0a3ec30cdda611ef050de0"
+sum = "sha256:fdc61c46f06848e23e7194ee7498d6008788c1297e9686ec38639956e18bdb40"
