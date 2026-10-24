@@ -42,6 +42,14 @@ The two objects are rebuilt only when `miniaudio.c`, `miniaudio.h`, `stb_vorbis.
 
 The file list is derived with `git ls-files --cached --others --exclude-standard '*.salam'`, so a new source file or a new directory needs no `Makefile` edit to be covered; it stops at the `vendor/basalam` submodule and skips ignored files and build output. `salam format` is the authority for style; the conventions are on the [contributing](/contributing) page.
 
+## Licence headers
+
+| Target | Runs | Purpose |
+| --- | --- | --- |
+| `make header-check` | checks every Salam source for the project header, marker line by marker line | fail, naming each file, when a header is missing, truncated or unclosed |
+
+The marker lines are the ones every source carries: the title, `Built on the Salam standard library and basalam`, the Salam and repository URLs, and `License: GPL-3.0-or-later`, all inside the first 20 lines after the opening `/*`. A header cut short fails, not only an absent one. The file list is the one `make fmt-check` derives, so a new source is covered without a `Makefile` edit, and the check rewrites nothing. CI's `check` job runs it on Ubuntu and macOS before the compiler steps.
+
 ## Documentation site
 
 | Target | Runs | Purpose |

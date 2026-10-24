@@ -14,7 +14,7 @@ mizrab is a Salam program, so its style follows the compiler's formatter rather 
 
 - `salam format` is the authority. Run `make fmt` before committing; `make fmt-check` is the gate that rejects unformatted files.
 - Indent with 4 spaces. `.editorconfig` matches the formatter.
-- Every file starts with the GPL-3.0-or-later licence header comment.
+- Every file starts with the GPL-3.0-or-later licence header comment. `make header-check` rejects a source without one and names the file.
 - Declaration order is imports, then `include`s, then declarations. The formatter enforces this order (`--fix-order` is on by default) and the compiler rejects the wrong order outright.
 - Every `pub` declaration carries an `@en "Name"` annotation followed by a `///` doc comment, which is basalam's convention. The doc comment comes after the annotation so `salam doc` picks it up.
 - Write the language, not a binding: use `std/term` for escape sequences.
