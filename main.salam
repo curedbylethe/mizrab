@@ -43,9 +43,9 @@ func main:
         ret 0
     end
     if flag.GetBool(f, "scan"):
-        // os.Args() includes the program name, which Parse files as positional 0
-        // on 0.5.9; skip it only when it is there, so a toolchain that drops it
-        // does not lose the first root.
+        // Parse was handed os.Args(), so the program name is positional 0;
+        // skip it only when it is there, so a caller passing a bare argument
+        // list does not lose the first root.
         args := flag.Positional(f)
         mut roots := Vector {} as Vector<str>
         mut first := 0
