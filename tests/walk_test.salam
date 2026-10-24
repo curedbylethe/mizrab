@@ -16,11 +16,14 @@
 // Covers the walk: the committed fixtures (sorted, sized, absolute, with the
 // non-audio file and the symlink left out), then a tree built at run time
 // under build/ for the rules the fixtures cannot show: dot-names are pruned in
-// both files and directories, and the extension match ignores letter case. A
-// root that does not exist yields nothing.
+// both files and directories, the extension match ignores letter case, a
+// symlinked directory is not entered (so no duplicate and no cycle), and the
+// walk stops 32 directories below the root. A root that does not exist yields
+// nothing.
 
 import filepath
 import os
+import os.shell
 import testing
 
 include "../library/library.salam"
@@ -30,15 +33,16 @@ link static "../build/library_shim.o"
 // Where the runtime tree lives. The harness runs from tests/, so this resolves
 // inside build/ and never touches the source tree.
 tree := "../build/tests/walktree"
+deep := "../build/tests/walkdeep"
 
 func fixtureTests:
     base := filepath.Abs("fixtures")
     got := library.Walk("fixtures")
-    testing.AssertEqInt(got.len(), 8)
+    testing.AssertEqInt(got.len(), 10)
 
-    names := ["packet-split.ogg", "tagged.flac", "tagged.mp3", "tagged.ogg", "tone.flac", "tone.mp3", "tone.ogg", "tone.wav"]
-    sizes := [760 as i64, 25325 as i64, 11164 as i64, 5506 as i64, 25237 as i64, 11075 as i64, 5422 as i64, 24044 as i64]
-    repeat 8 in i:
+    names := ["artist-only.mp3", "big-comment.ogg", "packet-split.ogg", "tagged.flac", "tagged.mp3", "tagged.ogg", "tone.flac", "tone.mp3", "tone.ogg", "tone.wav"]
+    sizes := [31 as i64, 70446 as i64, 760 as i64, 25325 as i64, 11164 as i64, 5506 as i64, 25237 as i64, 11075 as i64, 5422 as i64, 24044 as i64]
+    repeat 10 in i:
         e := got.get(i)
         testing.AssertEqStr(e.path, base.concat("/").concat(names[i]))
         testing.AssertEqInt64(e.size, sizes[i])
@@ -48,7 +52,7 @@ func fixtureTests:
 end
 
 func treeTests:
-    os.RemoveAll(tree)
+    shell.System("rm -rf ".concat(tree))
     os.MkdirAll(tree.concat("/.cache"))
     os.WriteFile(tree.concat("/.cache/inside.mp3"), "abc")
     os.WriteFile(tree.concat("/.HIDDEN.mp3"), "abc")
@@ -59,12 +63,42 @@ func treeTests:
     testing.AssertEqStr(got.get(0).path, filepath.Abs(tree).concat("/UPPER.FLAC"))
     testing.AssertEqInt64(got.get(0).size, 3 as i64)
 
-    os.RemoveAll(tree)
+    // A symlink to a directory: the real file is listed once, through the real
+    // directory only.
+    os.MkdirAll(tree.concat("/real"))
+    os.WriteFile(tree.concat("/real/a.mp3"), "abc")
+    shell.System("ln -s real ".concat(tree).concat("/linked"))
+    again := library.Walk(tree)
+    testing.AssertEqInt(again.len(), 2)
+    testing.AssertEqStr(again.get(0).path, filepath.Abs(tree).concat("/UPPER.FLAC"))
+    testing.AssertEqStr(again.get(1).path, filepath.Abs(tree).concat("/real/a.mp3"))
+
+    shell.System("rm -rf ".concat(tree))
     testing.AssertEqInt(library.Walk(tree).len(), 0)
+end
+
+// The walk enters directories up to 32 levels below the root: a file in the
+// 32nd is listed, a file in the 33rd is not.
+func depthTests:
+    os.RemoveAll(deep)
+    mut dir := deep
+    repeat 31:
+        dir = dir.concat("/d")
+    end
+    os.MkdirAll(dir.concat("/d"))
+    os.WriteFile(dir.concat("/d/ok.mp3"), "abc")
+    os.MkdirAll(dir.concat("/d/d"))
+    os.WriteFile(dir.concat("/d/d/deep.mp3"), "abc")
+
+    got := library.Walk(deep)
+    testing.AssertEqInt(got.len(), 1)
+    testing.AssertEqStr(got.get(0).path, filepath.Abs(dir.concat("/d/ok.mp3")))
+    os.RemoveAll(deep)
 end
 
 func main:
     fixtureTests()
     treeTests()
+    depthTests()
     ret testing.Summary()
 end

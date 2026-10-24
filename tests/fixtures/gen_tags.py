@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Builds tagged.mp3, tagged.flac, tagged.ogg and packet-split.ogg from the
-committed tone.* fixtures (the last one is synthetic).
+"""Builds tagged.mp3, tagged.flac, tagged.ogg, packet-split.ogg, big-comment.ogg
+and artist-only.mp3 from the committed tone.* fixtures (the last three are
+synthetic).
 
 Python 3 standard library only, deterministic: no timestamps, no random bytes,
 fixed field order, so a second run rewrites identical bytes.
@@ -54,6 +55,12 @@ def tagged_mp3():
         + frame(b"TALB", 0x03, MP3_ALBUM.encode("utf-8"))
     )
     return b"ID3\x03\x00\x00" + syncsafe(len(frames)) + frames + tone
+
+
+def artist_only_mp3():
+    """Synthetic, not audio: an ID3v2.3 tag with a TPE1 frame and no title."""
+    frames = frame(b"TPE1", 0x03, b"ArtistOnly")
+    return b"ID3\x03\x00\x00" + syncsafe(len(frames)) + frames
 
 
 def tagged_flac():
@@ -201,8 +208,24 @@ def packet_split_ogg():
     )
 
 
+def big_comment_ogg():
+    """Synthetic, not audio: a 70000 byte comment packet, over the reader's 64 KiB cap."""
+    serial = 0x4D5A5242
+    ident = b"\x01vorbis" + struct.pack("<IBIiiiBB", 0, 1, 22050, 0, 0, 0, 0xB8, 1)
+    comment = vorbis_comment_packet([b"TITLE=" + OGG_TITLE.encode("utf-8"), b"FILLER=" + b"x" * 70000])
+    # A page holds at most 255 segments: fill page 1 with 255 full ones.
+    rest = comment[65025:]
+    return (
+        ogg_page(0x02, 0, serial, 0, lacing(len(ident)), ident)
+        + ogg_page(0, -1, serial, 1, [255] * 255, comment[:65025])
+        + ogg_page(0x01, 0, serial, 2, lacing(len(rest)), rest)
+    )
+
+
 if __name__ == "__main__":
     write("tagged.mp3", tagged_mp3())
     write("tagged.flac", tagged_flac())
     write("tagged.ogg", tagged_ogg())
     write("packet-split.ogg", packet_split_ogg())
+    write("big-comment.ogg", big_comment_ogg())
+    write("artist-only.mp3", artist_only_mp3())
