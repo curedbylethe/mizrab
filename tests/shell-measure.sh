@@ -1,11 +1,20 @@
 #!/bin/sh
-# mizrab shell measure: startup to first frame and shutdown, headless.
+# mizrab shell measure: startup to first frame and shutdown, on a real pty.
 #
 # Twelve runs of tests/probe/probe_shell.salam, every raw value printed, then a
-# min / median / max table. The figure covers config.FromEnv, ui.NewShell(100,
-# 30), draw() and present() on the null audio backend with start() never called,
-# so it is comparable across runs and does not include opening a device.
-# Shutdown covers Shell.Close(), that is Screen.close().
+# min / median / max table. Each run is a child of `script`, so stdin is a pty:
+# ui.Open then really takes the terminal (raw mode, alternate screen, hidden
+# cursor, input thread) and Shell.Close really joins that thread. Run without a
+# pty, Open would no-op and both figures would describe nothing.
+#
+# Startup covers ui.Begin (guard install and flag file), NewTerminalShell,
+# Open (raw mode, alternate screen, input thread spawn) and the first
+# present(). Shutdown covers Shell.Close (terminal restore, input thread join,
+# frees) and ui.End. config.FromEnv and the instance lock are outside the
+# startup timer, as the probe's comment explains.
+#
+# State stays under build/tests/probe: XDG_STATE_HOME points there, so the lock
+# and the crash flag never touch the developer's real state directory.
 #
 # Not a test, not part of `make test`, not run by CI, and tests/run.sh never
 # discovers it (tests/*_test.salam only). Run by path, as tests/gap.sh is.
@@ -20,6 +29,7 @@ SALAM="${SALAM:-salam}"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BIN="$ROOT/build/tests/probe"
 RUNS=12
+RESULT="$BIN/probe_shell.result"
 
 # Salam links with the host toolchain on macOS; pin the deployment target to
 # the running OS so the linker does not warn about mismatched versions.
@@ -28,7 +38,11 @@ if [ "$(uname -s)" = "Darwin" ] && [ -z "${MACOSX_DEPLOYMENT_TARGET:-}" ]; then
     export MACOSX_DEPLOYMENT_TARGET
 fi
 
-mkdir -p "$BIN"
+mkdir -p "$BIN/state"
+# Absolute, so config.FromEnv uses it verbatim, and it lands under build/tests.
+XDG_STATE_HOME="$BIN/state"
+export XDG_STATE_HOME
+
 STARTS="$BIN/shell-measure-startup.txt"
 STOPS="$BIN/shell-measure-shutdown.txt"
 : >"$STARTS"
@@ -46,13 +60,22 @@ printf 'arch:  %s\n' "$(uname -m)"
 printf 'salam: %s\n' "$("$SALAM" version | head -n 1)"
 printf 'date:  %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 printf 'runs:  %s\n' "$RUNS"
-printf 'scope: config.FromEnv, NewShell(100, 30), draw, present; then Close\n'
-printf '       null audio backend, no tty, present() never flushes\n\n'
+printf 'scope: Begin, NewTerminalShell, Open, first present; then Close, End\n'
+printf '       under a pty: raw mode, alternate screen, input thread and its join\n\n'
 
 printf 'run   startup_us   shutdown_us\n'
 i=1
 while [ "$i" -le "$RUNS" ]; do
-    line=$("$BIN/probe_shell")
+    rm -f "$RESULT"
+    if ! script -q /dev/null "$BIN/probe_shell" "$RESULT" >/dev/null; then
+        echo "shell-measure: probe failed on run $i; it needs a pty (macOS script)" >&2
+        exit 1
+    fi
+    if [ ! -s "$RESULT" ]; then
+        echo "shell-measure: probe wrote no result on run $i (pty or state setup)" >&2
+        exit 1
+    fi
+    line=$(cat "$RESULT")
     startup=$(printf '%s\n' "$line" | cut -d' ' -f1 | cut -d= -f2)
     shutdown=$(printf '%s\n' "$line" | cut -d' ' -f2 | cut -d= -f2)
     case "$startup$shutdown" in
