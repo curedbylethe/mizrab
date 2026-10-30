@@ -118,13 +118,13 @@ The shape is `mizrab: <path>:<line>: <text>`. The file is read and validated bef
 ## Degrading
 
 - **No file at the default path.** Defaults, and no message: a missing default file is not reported.
-- **Nothing is created.** mizrab never makes a directory and never writes a default file, so a read-only or absent config directory is harmless.
+- **Nothing is created for the config.** Reading the config never makes a directory and never writes a default file, so a read-only or absent config directory is harmless. The shell does create its own state directory for its flag file and instance lock, and says so when no state directory resolves.
 - **`HOME` unset, `XDG_*` unset.** There is no default config location, so no file is read. The index path then needs `--index` or `library.index`; without one, a scan prints `mizrab: cannot find a data directory; pass --index` and exits 2 instead of writing into the working directory.
-- **Non-scan invocations.** A bare `mizrab` prints its usage and exits 0, as before. A broken config still exits 2, and that is deliberate.
+- **A bare invocation.** With stdin a terminal it opens [the app shell](/app-shell); with stdin not a terminal it prints its usage and exits 0, as before. A broken config still exits 2 either way, and that is deliberate.
 
 ## Keys
 
-The keymap is not in the binary yet. `ui/keymap.salam` declares the nine verbs and the keys that report them: basalam's vim preset plus four bindings of mizrab's own.
+The keymap is in the binary: the shell installs it when it opens. `ui/keymap.salam` declares the nine verbs and the keys that report them: basalam's vim preset plus four bindings of mizrab's own, and the shell adds `q`.
 
 | Key | Action | Source |
 | --- | --- | --- |
@@ -139,8 +139,9 @@ The keymap is not in the binary yet. `ui/keymap.salam` declares the nine verbs a
 | `n` | next track | mizrab |
 | `p` | previous track | mizrab |
 | `:` | command line | mizrab |
+| `q` | quit the shell | mizrab |
 
-The set is fixed in this release: there is no `[keys]` section and no remapping. `h/j/k/l`, `Tab`, the arrows, `gg`, `G`, `Esc` and `/` come from basalam's `NewVimKeymap` preset, while `space`, `n`, `p` and `:` are mizrab's own bindings on top of it.
+The set is fixed in this release: there is no `[keys]` section and no remapping. `h/j/k/l`, `Tab`, the arrows, `gg`, `G`, `Esc` and `/` come from basalam's `NewVimKeymap` preset, while `space`, `n`, `p` and `:` are mizrab's own bindings on top of it, and the shell's event loop binds `q`. In the current shell, `:` and `/` report their verb and open nothing yet; see [the app shell](/app-shell).
 
 ## Limits
 

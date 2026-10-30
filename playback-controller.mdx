@@ -15,7 +15,7 @@ The playback controller is the headless layer above [the audio engine](/audio-en
 
 ## Status
 
-The controller exists and is fully tested headless, on miniaudio's null backend with a caller-supplied clock. The binary does not use it yet: `main.salam` does not include `player/`, so there is still no play command and no user interface, and the binary cannot play music. The package includes only the engine and the Salam standard library; it has no basalam import and nothing above the engine.
+The controller exists and is fully tested headless, on miniaudio's null backend with a caller-supplied clock. The binary uses it: `main.salam` includes `player/`, and the [app shell](/app-shell)'s event loop calls `Toggle`, `Next` and `Prev` for `space`, `n` and `p`. The package includes only the engine and the Salam standard library; it has no basalam import and nothing above the engine.
 
 ## States
 

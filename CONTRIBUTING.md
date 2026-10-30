@@ -57,7 +57,7 @@ the `.mdx` files at the repository root.
 
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
 every directory, including `config/`, which the binary reads at startup, and
-`ui/`, which the binary does not include yet.
+`ui/`, which holds the app shell.
 
 ## Tests
 
