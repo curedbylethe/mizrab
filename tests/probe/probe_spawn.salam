@@ -1,0 +1,95 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// probe_exit.salam with one difference: main starts a second thread that never
+// returns, so the entry module is multi-threaded and the LLVM backend's
+// single-threaded SIGINT/SIGTERM handler is not installed. The driver sends
+// SIGTERM and records whether the runtime handler still ran (row 7) by whether
+// the atexit marker appears.
+//
+// Kept as its own program rather than a flag on probe_exit because the gate is
+// per entry module: a conditional spawn would not change the compiled binary.
+
+import conv
+import core
+import os
+import thread
+
+extern:
+    func write(fd: int, buf: void *, n: int): i64
+    noret func _exit(code: int)
+    func signal(sig: int, handler: void *): void *
+    func atexit(fn: void *): int
+    func kill(pid: int, sig: int): int
+    func getpid(): int
+    func sleep(seconds: int): int
+end
+
+const sigAbort := 6
+
+export:
+    func on_atexit():
+        println "atexit_ran"
+    end
+
+    func on_abort(_sig: int):
+        _ := write(1, "abort_handler_ran\n" as void *, 18)
+    end
+end
+
+func marker(text: str):
+    println text
+end
+
+func nested_block():
+    repeat 1:
+        defer marker("defer_inner")
+        println "inner_body"
+    end
+    println "after_inner"
+end
+
+func idle(_arg: void *):
+    sleep(60)
+end
+
+func main():
+    atexit(&on_atexit)
+    worker := thread.New(spawn(idle, null))
+    _ := worker
+    args := os.Args()
+    mut path := "normal"
+    if args.len() > 1:
+        path = args.get(1)
+    end
+    if args.len() > 2 and args.get(2) == "sigabrt":
+        signal(sigAbort, &on_abort)
+        println "sigabrt_handler_installed"
+    end
+    defer marker("defer_outer")
+    nested_block()
+    if path == "panic":
+        core.Panic("probe panic")
+    end
+    println "ready pid=" + conv.FormatInt(os.Pid() as i64)
+    if path == "sigterm":
+        repeat 30:
+            sleep(1)
+        end
+    else:
+        println "before_ret"
+    end
+    ret 0
+end

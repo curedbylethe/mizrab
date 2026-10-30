@@ -1,0 +1,101 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Exit-path probe, driven by tests/probe/probe.sh. Not a test: the name has no
+// _test suffix, so tests/run.sh never discovers it.
+//
+// Registers the mechanisms once at startup - an atexit handler and a defer in
+// the function body and in a nested block - and prints a marker from each, so
+// the driver can tell which of them ran. Then it exits by the path named in
+// argv[1]:
+//
+//   normal   return from main with 0 (rows 1-3: defer at ret, defer in a
+//            nested block, atexit on a normal exit)
+//   panic    core.Panic, which aborts (row 4: status and atexit on panic)
+//   sigterm  print a ready line and hold still until the driver sends SIGTERM
+//            (row 6: whether the runtime's handler runs, and what status)
+//
+// A second argument of "sigabrt" installs a SIGABRT handler before the panic,
+// for row 5: the handler writes its marker and returns, so abort() re-raises
+// and the observed status says whether the handler intercepted it.
+//
+// The externs are the stage's list. write/_exit/kill/getpid are unused here on
+// purpose: their declarations are part of the measurement surface the other
+// probes use.
+
+import conv
+import core
+import os
+
+extern:
+    func write(fd: int, buf: void *, n: int): i64
+    noret func _exit(code: int)
+    func signal(sig: int, handler: void *): void *
+    func atexit(fn: void *): int
+    func kill(pid: int, sig: int): int
+    func getpid(): int
+    func sleep(seconds: int): int
+end
+
+const sigAbort := 6
+
+export:
+    func on_atexit():
+        println "atexit_ran"
+    end
+
+    func on_abort(_sig: int):
+        _ := write(1, "abort_handler_ran\n" as void *, 18)
+    end
+end
+
+func marker(text: str):
+    println text
+end
+
+func nested_block():
+    repeat 1:
+        defer marker("defer_inner")
+        println "inner_body"
+    end
+    println "after_inner"
+end
+
+func main():
+    atexit(&on_atexit)
+    args := os.Args()
+    mut path := "normal"
+    if args.len() > 1:
+        path = args.get(1)
+    end
+    if args.len() > 2 and args.get(2) == "sigabrt":
+        signal(sigAbort, &on_abort)
+        println "sigabrt_handler_installed"
+    end
+    defer marker("defer_outer")
+    nested_block()
+    if path == "panic":
+        core.Panic("probe panic")
+    end
+    println "ready pid=" + conv.FormatInt(os.Pid() as i64)
+    if path == "sigterm":
+        repeat 30:
+            sleep(1)
+        end
+    else:
+        println "before_ret"
+    end
+    ret 0
+end

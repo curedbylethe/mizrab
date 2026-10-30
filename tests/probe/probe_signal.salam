@@ -1,0 +1,78 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// SIGUSR1 probe, driven by tests/probe/probe.sh. Not a test.
+//
+// Installs a Salam function as the SIGUSR1 handler. The handler allocates
+// nothing: it writes one fixed literal with write(2) and calls _exit(0), which
+// is all an async-signal-safe handler may do here. The driver sends the
+// signal once the ready line appears.
+//
+//   plain    handler installed, then hold still (row 8)
+//   screen   handler installed, then NewScreen(...).start(), which installs
+//            basalam's SIGWINCH plumbing and spawns its threads; hold still
+//            (row 10: does SIGUSR1 still fire after start())
+//
+// SIGUSR1 is 30 on Darwin and 10 on Linux.
+//
+// The screen case is meant to be run on a throwaway pty (probe.sh uses
+// `script -q /dev/null`): if the handler fires, _exit(0) skips screen.close(),
+// so the terminal it attached to is never restored - do not point it at a real
+// terminal. If the handler does not fire, close() runs before the failure exit.
+
+import conv
+import os
+import "github.com/curedbylethe/basalam/basalam"
+
+extern:
+    func write(fd: int, buf: void *, n: int): i64
+    noret func _exit(code: int)
+    func signal(sig: int, handler: void *): void *
+    func atexit(fn: void *): int
+    func kill(pid: int, sig: int): int
+    func getpid(): int
+    func sleep(seconds: int): int
+end
+
+const sigUsr1 := SALAM_OS_MAC ? 30 : 10
+
+export:
+    func on_usr1(_sig: int):
+        _ := write(1, "usr1_handler_ran\n" as void *, 17)
+        _exit(0)
+    end
+end
+
+func main():
+    signal(sigUsr1, &on_usr1)
+    args := os.Args()
+    mut mode := "plain"
+    if args.len() > 1:
+        mode = args.get(1)
+    end
+    mut screen := basalam.NewScreen(basalam.NewText("probe") as dyn basalam.Widget, 20, 5)
+    if mode == "screen":
+        screen.start()
+    end
+    println "ready pid=" + conv.FormatInt(os.Pid() as i64)
+    repeat 30:
+        sleep(1)
+    end
+    if mode == "screen":
+        screen.close()
+    end
+    println "handler_did_not_fire"
+    ret 1
+end

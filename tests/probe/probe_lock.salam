@@ -1,0 +1,49 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Exclusive-create probe, driven by tests/probe/probe.sh. Not a test.
+//
+// Opens the same path twice with mode "wx" - os.Open passes the mode string
+// straight to fopen, so "x" is the only atomic create - and prints what each
+// open returned. Row 9 of the table: two opens, one success, and what the
+// second one is (null, not an exception).
+//
+// Usage: probe_lock [path]   (default: probe.lock, relative to the cwd)
+
+import os
+
+extern:
+    func write(fd: int, buf: void *, n: int): i64
+    noret func _exit(code: int)
+    func signal(sig: int, handler: void *): void *
+    func atexit(fn: void *): int
+    func kill(pid: int, sig: int): int
+    func getpid(): int
+    func sleep(seconds: int): int
+end
+
+func main():
+    args := os.Args()
+    mut path := "probe.lock"
+    if args.len() > 1:
+        path = args.get(1)
+    end
+    _ := os.Remove(path)
+    first := os.Open(path, "wx")
+    println first == null ? "first=null" : "first=ok"
+    second := os.Open(path, "wx")
+    println second == null ? "second=null" : "second=ok"
+    ret 0
+end
