@@ -1,0 +1,181 @@
+---
+title: "App shell"
+description: "The mizrab terminal shell: its layout and focus ring, the keys it binds, how it restores the terminal and refuses a second instance, and the recorded startup, shutdown and leak figures."
+keywords:
+  - "shell"
+  - "interface"
+  - "basalam"
+  - "terminal"
+  - "signals"
+  - "startup"
+  - "leaks"
+---
+
+The app shell is mizrab's terminal interface: one basalam `Screen`, its root tree and one event loop, in the Salam package `ui` (`ui/ui.salam` entry file, `shell.salam`, `loop.salam`, `terminal.salam`, `instance.salam`, `keymap.salam`). A bare `mizrab` with stdin a terminal starts the shell. With stdin **not** a terminal the binary still prints the usage block and exits 0, exactly as before, so scripts and the harness's smoke checks see what they always saw. `--version`, `--help`, `--scan`, `--index` and `--config` are unchanged.
+
+This page is the shell's record: what it draws, what it binds, what it does to the terminal and what it does not do yet. The [configuration](/configuration) page covers the config file and the full keymap; [the playback controller](/playback-controller) covers the layer the shell drives.
+
+## Status
+
+The shell opens and runs: a header, one framed body panel, a footer, four focus stops and an event loop. It is not a finished interface. The keys mizrab binds itself are these six, plus the focus moves basalam's vim preset already provides:
+
+| Key | Action |
+| --- | --- |
+| `space` | play or pause |
+| `n` | next track |
+| `p` | previous track |
+| `:` | command line |
+| `/` | search |
+| `q` | quit |
+
+**`:` and `/` record the request and do nothing else yet.** They report a verb to the application; no command line opens and no search runs. The playlist, now-playing, search and command-line screens belong to CUR-508, which also owns the modal layer and the body content. `Esc` is deliberately unbound. The body panel is an empty frame titled `‹body›`, and the modal layer does not exist: the `Stack` keeps the slot for CUR-508 rather than anticipating its widget.
+
+The three playback keys reach the controller, but there is no playlist yet: the queue is empty, so `n` and `p` are rejected and `space` has nothing to start until CUR-508 loads one.
+
+Focus movement works: `h`, `j`, `k`, `l`, `Tab`, the arrows, `gg` and `G` come from basalam's vim preset and move the focus ring described below. The set is fixed in this release; there is no `[keys]` section and no remapping.
+
+## Layout
+
+The shell is one `basalam.Screen` whose root is a `Column` of three children:
+
+| Part | Widget | Contents |
+| --- | --- | --- |
+| Header | `Row` | the wordmark `[ M I Z R A B ]` and a right-aligned `‹context›` text |
+| Body | `Stack` | one framed panel, titled `‹body›`; an empty frame |
+| Footer | `Row` | the playback status `▶︎ playing`, the key hints, and the mode `normal` |
+
+The context text is a placeholder and stays one until CUR-508 supplies a real value. The status reads `playing` and the mode `normal` for the same reason: nothing updates them yet.
+
+**Focus ring.** Four stops, in registry order: body → status → keys → mode → body. There is no separate focus list; basalam walks the registered widgets by ascending id, which is the order they were added. The header's wordmark and context segments are never focus stops.
+
+**Colours.** Four ANSI colours, and no theme detection beyond basalam's tier:
+
+| Role | Colour | Where |
+| --- | --- | --- |
+| Wordmark | 15, bright white, bold | header |
+| Hints and the unfocused frame | 8, bright black | footer keys, body border |
+| Focus | 3, yellow | the focused segment, and the focused body frame |
+| Playback glyph | 2, green | the `▶︎` before the status |
+
+**Focus is drawn, not announced.** The focused segment paints its label run — the text plus one cell each side — in inverse yellow, and the body frame switches from light to heavy box-drawing with its edges going from bright black to yellow. The mode segment right-aligns; the others left-align.
+
+**The hint line refits.** At 91 columns and up it reads `space play/pause  n next  p previous  : command  / search  q quit`. Narrower screens shorten the labels, and between 60 and 76 columns whole hints drop in the order `p`, `/`, `n`, `:`. `space` and `q` are never dropped.
+
+**Below 60 columns or 12 rows the tree is replaced.** The whole `Column` gives way to one centred line, `too small · 60 × 12`, in bright black. `60 × 12` itself is still the drawn layout; only less than that degrades.
+
+## Terminal safety
+
+Opening the shell means raw mode, the alternate screen and a hidden cursor. Every exit the process controls puts them back:
+
+- **`q`** stops the loop, which closes the screen on the way out.
+- **`Ctrl-C`, SIGTERM and SIGHUP** are handled by one exported handler, installed before the screen opens. It writes the restore bytes — reset the attributes, show the cursor, leave the alternate screen — then restores the terminal mode it captured before raw mode, then calls `_exit(128 + sig)`.
+- **A panic** reaches the same handler. `core.Panic` prints and calls `abort()`, which raises SIGABRT; the handler is installed for SIGABRT too, so it runs and the process exits 134 after the terminal is put back.
+
+**The mode restore is separate on purpose.** The escape sequences alone do not undo raw mode: measured after a forced panic, `stty -a` reported `-icanon -isig -echo` even though the restore bytes had been written. The handler therefore restores the termios mode as well, and the bytes are built once at install time because a signal handler may not allocate.
+
+**Mouse reporting is not restored because mizrab never enables it.** `NewScreen` leaves mouse reporting off and nothing turns it on, so the restore bytes carry no mouse sequence. A later change that enables mouse reporting must add the disable sequence to the restore, or the cursor and screen come back while the terminal keeps reporting motion.
+
+**The flag file repairs a dirty terminal.** `<state>/shell.flag` is written when the shell starts and removed on a clean exit. A start that finds the flag replays the same restore sequence before opening the screen and removes the flag, so a terminal an earlier run left dirty is repaired. A run with no resolvable state directory skips the flag and its repair, prints one line on stderr, and still installs the handler.
+
+**The gap: `kill -9` cannot be caught.** SIGKILL cannot be intercepted, so the handler never runs. The next start replays the escape sequence from the flag — the alternate screen, the cursor and the attributes come back — but it does **not** put the termios mode back: the shell that was killed with `-9` stays in the raw mode it died in and has no echo until `stty sane`. The flag records that a run was live; it does not carry the mode.
+
+## Single instance
+
+One shell per state directory. The lock is `instance.lock` in the state directory — `~/.local/state/mizrab/instance.lock` by default — created with an exclusive create (`os.Open(path, "wx")`, measured working: `first=ok second=null`) and holding the owner's pid. A second launch probes that pid and, when it is alive, refuses without touching the terminal or the screen:
+
+```text
+mizrab: already running (pid N); quit it, or remove /Users/you/.local/state/mizrab/instance.lock
+```
+
+The line goes to stderr, the exit status is 1, and the first instance is not raised or signalled: std has no IPC primitive for it, and a fixed TCP port would be a worse design than a clear refusal. A lock whose pid is gone, or whose contents are not a number, is stale: it is removed and the create retried once, so the kernel settles a race between two launches. An unresolved state directory turns the lock off rather than stopping the player.
+
+Both plain outputs survive stdout piped: the refusal above and the usage block are ordinary writes, not a screen. That is what lets a script run the binary without a terminal.
+
+## Startup and shutdown
+
+**Method.** `tests/shell-measure.sh` builds and runs `tests/probe/probe_shell.salam` twelve times, once at a time, after a prior `make build`. The probe resolves the config, records `time.MonoNanos()`, constructs the shell, calls `draw()` and `present()` once, records again, then calls `Screen.close()` and records again. The script prints every raw value and a min / median / max table with the host, `salam version` and the date in the header. It is run by hand: not a make target, not run by CI, matching `tests/gap.sh`.
+
+**What the number covers.** The startup figure spans config resolution, shell construction and the first `present()`, on the **null** audio backend. That scope is what makes runs comparable: it does not include opening a real device, which would put the machine's audio stack in the number. The shutdown figure covers `Screen.close()`: the restore bytes, the two thread joins and the frees.
+
+**Recorded result.** 12 runs, one at a time.
+
+| Item | Value |
+| --- | --- |
+| Host | `Darwin arm64`, macOS 27.0.1 (build 26A434) |
+| Compiler | Salam 0.5.9 |
+| Backend | `null`, no device opened |
+| Runs | 12 |
+| Date | 2026-10-31 00:19:08 +0330 |
+| Startup `startup_us`, min / median / max | 154 / 177 / 422 |
+| Shutdown `shutdown_us`, min / median / max | 3 / 12 / 97 |
+
+The runs, in order, as `startup_us` then `shutdown_us`: 165/13, 167/97, 391/14, 176/15, 186/10, 187/10, 172/12, 154/12, 178/20, 422/3, 172/10, 346/11
+
+The spread is real: the number depends on the machine, its load and the process start, so treat it as a range for this host, and re-run the script rather than quote a single value.
+
+## Leaks
+
+**Method.** `tests/leaks.sh` starts `tests/probe/probe_audio.salam`, which plays and stops one fixture twenty times on the null backend, prints its pid and sleeps, so an outside sampler can compare an early process against a settled one. The script samples `lsof -p <pid>` for file descriptors and `ps -M <pid>` for threads at **3 s** and at **8 s**, and prints both counts and the delta.
+
+**Child processes are zero by construction.** The shell spawns none: the only process facilities in the tree are unused, so the page states the count instead of measuring it. It does run the screen's own threads, which is why threads are sampled rather than assumed.
+
+| Sample point | File descriptors | Threads |
+| --- | --- | --- |
+| 3 s | 6 | 1 |
+| 8 s | 6 | 1 |
+| Delta | 0 | 0 |
+
+**This is sampling, not proof of absence.** Two points say the counts did not grow between them on this host in this run; they do not prove that nothing leaks on another path, another backend or a longer session. A non-zero delta is a result to report, not to round away.
+
+## Upstream findings
+
+Two limitations were found, both in the language and the compiler rather than in mizrab. Neither has been filed upstream yet; each is written in the four fields of the [upstream findings](/contributing#upstream-findings) convention, and this block is for `FINDINGS.md` (CUR-510) to copy. Both findings share the first two fields. Every value below was measured with `tests/probe/probe.sh`, which is run by hand and is not part of `make test` or CI.
+
+**1. Salam version.**
+
+```text
+salam 0.5.9
+commit:  d5e0c093c7e0d978bc5eae404fdeed4755d581d9
+date:    2026-10-23T21:52:27+02:00
+built:   Oct 23 2026 20:24:56 UTC
+origin:  official release build (v0.5.9)
+os:      mac
+arch:    arm64
+cpus:    8
+threads: 8
+memory:  8.0 GiB
+```
+
+**2. OS and terminal.** macOS 27.0.1 (build 26A434), arm64, `$TERM=xterm-256color`; `cc` is Apple clang 17.0.0.
+
+### No panic-safe unwinding
+
+**3. Minimal reproduction.** From the repository root, with the compiler on `PATH`:
+
+```sh
+sh tests/probe/probe.sh
+```
+
+The `probe_exit` rows cover the return paths, and its `exit:panic` and `exit:panic-abort` rows the panic path; the script prints one table and retries nothing.
+
+**4. Expected vs actual.** Expected: a block-scoped `defer` in a function that calls `core.Panic` has run by the time the process dies, and `atexit` has fired, as they do on a normal return. Actual, measured:
+
+- `defer` is block-scoped, runs last-in-first-out, and runs on `ret`, `break` and `continue`. It does **not** run on `os.Exit`.
+- `core.Panic` prints and calls `abort()`; `abort()` runs neither `defer` nor `atexit`. Measured exit status **134**, with no defer marker and no atexit marker in the capture.
+- A Salam-installed SIGABRT handler **does** run for that `abort()`, but the process still exits **134**.
+
+Mitigation shipped: the shell installs one handler for SIGINT, SIGTERM, SIGHUP and SIGABRT that writes the restore bytes, puts the terminal mode back and calls `_exit(128 + sig)`, plus the `<state>/shell.flag` file that repairs a terminal an earlier run left dirty. The mitigation is a terminal restore, not unwinding: the panic still does not run the deferred work.
+
+### A top-level `spawn` removes the runtime's signal handlers
+
+**3. Minimal reproduction.** The same `sh tests/probe/probe.sh`; the `exit:sigterm` row sends SIGTERM to a single-threaded build and the `spawn:sigterm` row to the same program with a top-level `spawn` in the entry module.
+
+**4. Expected vs actual.** Expected: SIGTERM runs the process's exit hooks, so an `atexit` marker appears in the capture. Actual: the LLVM backend installs its SIGINT/SIGTERM handlers only when the entry module is single-threaded. Including `player/` puts a `spawn` in the entry module, so `mizrab` is in the no-runtime-handler regime: measured, SIGTERM on the build with a spawn ran no atexit hook, while the single-threaded build did. The exit status was **143** in both cases; the atexit marker is the discriminator, not the status, so the difference is invisible to anything that only checks the status. Mitigation shipped: none is needed for the terminal, because the shell installs its own handler for those signals before the screen opens and does not rely on the runtime's. The runtime handler is still absent for any other process in this regime, and that is the limitation being reported.
+
+## Not verified
+
+- **No real-device result.** The startup, shutdown and leak figures are on the null backend. No sound card was opened by any measured run.
+- **No Linux measurement.** Both figures come from one macOS host.
+- **No long session.** The leak sampling spans 8 seconds and twenty play/stop cycles, not hours.
+- **No screenshot.** The shell has no recorded terminal capture on this page; the render is described, not photographed.
+- **No body content.** The playlist, now-playing, search and command-line screens, the modal layer and the `Esc` binding are CUR-508's, and nothing here measures or describes them.
