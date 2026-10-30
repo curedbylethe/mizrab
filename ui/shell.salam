@@ -1,0 +1,358 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The app shell: one basalam Screen whose root is a Column of a header Row, a
+// body Stack and a footer Row. The four focus stops are the body panel and the
+// three footer segments, in the order the widgets are added: basalam walks the
+// registry by ascending id, so insertion order is the focus ring and there is
+// no separate focus list. Every container child is also registered on the
+// screen with the same value, or it would be positioned and never painted.
+//
+// Geometry (DESIGN.md §1): header h 1, pad-x 2, gap 2, wordmark 15 + context
+// fill; body fill; footer h 1, pad-x 1, gap 1, status 11 + keys fill + mode 9.
+// The hint ladder and the `< 60 × 12` degrade line are refit rules, not
+// content: both are derived from the widget's own bounds when it renders.
+
+package ui
+
+import str
+import term
+import "github.com/curedbylethe/basalam/basalam"
+
+const _WORDMARK := "[ M I Z R A B ]"
+
+const _CONTEXT := "‹context›"
+
+const _STATUS_HEAD := "▶︎"
+
+const _STATUS := "playing"
+
+const _MODE := "normal"
+
+// Hint labels, widest first. The 60–76 band drops whole hints in the order p,
+// /, n, : and never drops space or q (DESIGN.md §5).
+const _HINTS_FULL := "space play/pause  n next  p previous  : command  / search  q quit"
+
+const _HINTS_SHORT := "space play  n next  p prev  : cmd  / search  q quit"
+
+const _HINTS_NO_P := "space play  n next  : cmd  / search  q quit"
+
+const _HINTS_NO_P_SLASH := "space play  n next  : cmd  q quit"
+
+const _HINTS_NO_P_SLASH_N := "space play  : cmd  q quit"
+
+const _HINTS_MIN := "space play  q quit"
+
+const _DEGRADE := "too small · 60 × 12"
+
+const _MIN_WIDTH := 60
+
+const _MIN_HEIGHT := 12
+
+// With the footer geometry above, the keys run has width − 25 cells available
+// inside its own 1-cell pad: W − 2 (footer pad) − 11 (status) − 9 (mode) − 2
+// (gaps) − 1 (keys pad).
+const _KEYS_RESERVE := 25
+
+// Which line a Segment draws.
+enum Slot:
+    Wordmark
+    Context
+    Status
+    Hints
+    Mode
+end
+
+// One line of text in the shell. The focused segment draws its label run —
+// the text plus one cell each side — inverse yellow (DESIGN.md §3); the label
+// itself is derived per render, so a resize needs no widget mutation.
+struct Segment:
+    pub use basalam.BaseWidget
+
+    slot: Slot = Slot.Wordmark
+    align: basalam.Alignment = basalam.Alignment.Left
+    style: basalam.Style = basalam.StyleDefault
+    head: str = ""
+    head_style: basalam.Style = basalam.StyleDefault
+    inset: int = 0
+    focus: bool = false
+
+    pub func focusable(): bool:
+        ret this.focus
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        tier := basalam.DetectTier()
+        mut label := ""
+        if this.slot == Slot.Wordmark:
+            label = _WORDMARK
+        else this.slot == Slot.Context:
+            label = _elide(_CONTEXT, bounds.width - 2 * this.inset)
+        else this.slot == Slot.Status:
+            label = _STATUS
+        else this.slot == Slot.Hints:
+            label = _hints(bounds.width - 1)
+        else:
+            label = _MODE
+        end
+        mut run := label
+        if this.head != "":
+            run = this.head + " " + label
+        end
+        mut x := bounds.x + this.inset
+        if this.align == basalam.Alignment.Right:
+            x = bounds.x + bounds.width - this.inset - term.Width(run)
+        end
+        if buf.focused:
+            buf.put_str(x - 1, bounds.y, " " + run + " ", _focus_sgr())
+            ret
+        end
+        mut cx := x
+        if this.head != "":
+            buf.put_str(cx, bounds.y, this.head, basalam.StyleSgr(this.head_style, tier))
+            cx = cx + term.Width(this.head) + 1
+        end
+        buf.put_str(cx, bounds.y, label, basalam.StyleSgr(this.style, tier))
+    end
+end
+
+// The body panel: a light single-line frame, heavy and yellow while focused
+// (DESIGN.md §2–§3). The title rides the top edge from x + 2 as one run.
+struct Frame:
+    pub use basalam.BaseWidget
+
+    title: str = ""
+    focus: bool = true
+
+    pub func focusable(): bool:
+        ret this.focus
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        tier := basalam.DetectTier()
+        mut edge := basalam.Style { fg = basalam.BrightBlack }
+        mut border := basalam.BorderStyle.Single
+        if buf.focused:
+            edge = basalam.Style { fg = basalam.Yellow }
+            border = basalam.BorderStyle.Double
+        end
+        basalam.DrawBorder(buf, bounds, border, edge, "")
+        if bounds.width < 6:
+            ret
+        end
+        run := " " + this.title + " "
+        mut sgr := basalam.StyleSgr(edge, tier)
+        if buf.focused:
+            sgr = sgr + term.Sgr(term.StyleReverse)
+        end
+        buf.put_str(bounds.x + 2, bounds.y, run, sgr)
+    end
+end
+
+// The degrade cover: at less than 60 × 12 it clears every cell and writes one
+// centred line in bright black, so the Column underneath is not drawn.
+struct Degrade:
+    pub use basalam.BaseWidget
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        if bounds.width >= _MIN_WIDTH and bounds.height >= _MIN_HEIGHT:
+            ret
+        end
+        buf.fill(bounds, " ", "")
+        w := term.Width(_DEGRADE)
+        mut x := bounds.x + (bounds.width - w) / 2
+        if x < bounds.x:
+            x = bounds.x
+        end
+        buf.put_str(
+            x, bounds.y + bounds.height / 2, _DEGRADE, basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier())
+        )
+    end
+end
+
+@en "Shell"
+/// The app shell: the screen, its root tree and the ids of the widgets in the
+/// focus ring. Build it with NewShell or NewTerminalShell.
+pub struct Shell:
+    @en "screen"
+    /// The one Screen the shell owns. Never copy it: it holds the buffer, the
+    /// widget tree, the event channel and the thread handles.
+    pub screen: basalam.Screen
+
+    degrade: dyn basalam.Widget
+    body_id: int = -1
+    status_id: int = -1
+    keys_id: int = -1
+    mode_id: int = -1
+    width: int = 0
+    height: int = 0
+
+    @en "Resize"
+    /// Refits the root tree to `width` × `height` and keeps the degrade cover
+    /// the size of the screen.
+    pub func Resize(width: int, height: int):
+        this.screen.resize(width, height)
+        this.width = width
+        this.height = height
+        this.degrade.set_bounds(basalam.Rect { width = width, height = height })
+    end
+
+    @en "FocusOrder"
+    /// The focus stop ids in ring order: body, status, keys, mode. This is the
+    /// registry order the widgets were added in, restated so STAGE-02 can wire
+    /// the keymap without scanning the tree. The caller frees the vector.
+    pub func FocusOrder(): Vector<int>:
+        mut ids := Vector {} as Vector<int>
+        ids.push(this.body_id)
+        ids.push(this.status_id)
+        ids.push(this.keys_id)
+        ids.push(this.mode_id)
+        ret ids
+    end
+
+    @en "Hints"
+    /// The footer hint line at a screen width of `width` columns: full labels
+    /// at 91 and up, short labels at 77–90, whole hints dropped lowest-first
+    /// at 60–76.
+    pub func Hints(width: int): str:
+        ret _hints(width - _KEYS_RESERVE)
+    end
+
+    @en "Degraded"
+    /// True below 60 columns or 12 rows, where the Column is replaced by the
+    /// `too small` line.
+    pub func Degraded(): bool:
+        ret this.width < _MIN_WIDTH or this.height < _MIN_HEIGHT
+    end
+
+    @en "Close"
+    /// Releases the screen; meant for `defer` and safe to call twice.
+    pub func Close():
+        this.screen.close()
+    end
+end
+
+// The focused label run: yellow plus reverse video. term.Sgr builds the
+// reverse attribute because basalam.Style has no reverse field.
+func _focus_sgr(): str:
+    ret basalam.StyleSgr(basalam.Style { fg = basalam.Yellow }, basalam.DetectTier()) + term.Sgr(term.StyleReverse)
+end
+
+// The hint line for `avail` cells in the keys run. Bands first, then the drop
+// ladder; space and q are always kept (DESIGN.md §5).
+func _hints(avail: int): str:
+    if avail >= 66:
+        ret _HINTS_FULL
+    end
+    if avail >= 52:
+        ret _HINTS_SHORT
+    end
+    if avail >= 43:
+        ret _HINTS_NO_P
+    end
+    if avail >= 33:
+        ret _HINTS_NO_P_SLASH
+    end
+    if avail >= 25:
+        ret _HINTS_NO_P_SLASH_N
+    end
+    ret _HINTS_MIN
+end
+
+// Fits text in `width` cells by dropping characters from its left edge and
+// marking the cut with an ellipsis.
+func _elide(text: str, width: int): str:
+    if width >= term.Width(text):
+        ret text
+    end
+    if width <= 1:
+        ret ""
+    end
+    ret "…" + str.CharSubstr(text, term.Width(text) - width + 1, width - 1)
+end
+
+@en "NewShell"
+/// Builds the headless shell: one Screen over the Column/Row/Stack tree, the
+/// four focus stops in ring order, and no terminal. Nothing touches the
+/// terminal, so this is what tests and STAGE-02 use.
+pub func NewShell(width: int, height: int): Shell:
+    // Each widget is boxed exactly once, as a `dyn Widget`, and that one value
+    // goes to both the container and the screen registry. Boxing a plain
+    // struct at each call would make two widgets: one laid out, one painted.
+    mut header := basalam.NewRow()
+    header.set_padding(basalam.NewInsets(0, 2, 0, 2))
+    header.set_gap(2)
+    mut stack := basalam.NewStack()
+    mut footer := basalam.NewRow()
+    footer.set_padding(basalam.NewInsets(0, 1, 0, 1))
+    footer.set_gap(1)
+    mut root := basalam.NewColumn()
+
+    wordmark := Segment { slot = Slot.Wordmark, style = basalam.Style { fg = basalam.BrightWhite, bold = true } } as dyn basalam.Widget
+    context := Segment { slot = Slot.Context, align = basalam.Alignment.Right } as dyn basalam.Widget
+    body := Frame { title = "‹body›" } as dyn basalam.Widget
+    status := Segment {
+        slot = Slot.Status, head = _STATUS_HEAD, head_style = basalam.Style { fg = basalam.Green },
+        inset = 1, focus = true,
+    } as dyn basalam.Widget
+    keys := Segment { slot = Slot.Hints, style = basalam.Style { fg = basalam.BrightBlack }, inset = 1, focus = true } as dyn basalam.Widget
+    mode := Segment { slot = Slot.Mode, align = basalam.Alignment.Right, inset = 1, focus = true } as dyn basalam.Widget
+    degrade := Degrade {} as dyn basalam.Widget
+
+    _ := header.add(wordmark)
+    _ := header.add(context)
+    header.set_width(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 15 })
+    _ := stack.add(body)
+    _ := footer.add(status)
+    _ := footer.add(keys)
+    _ := footer.add(mode)
+    footer.set_width(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 11 })
+    footer.set_width(2, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 9 })
+
+    header_box := header as dyn basalam.Widget
+    stack_box := stack as dyn basalam.Widget
+    footer_box := footer as dyn basalam.Widget
+    _ := root.add(header_box)
+    _ := root.add(stack_box)
+    _ := root.add(footer_box)
+    root.set_height(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 1 })
+    root.set_height(2, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 1 })
+
+    mut screen := basalam.NewScreen(root as dyn basalam.Widget, width, height)
+    header_id := screen.add(basalam.RootId, header_box)
+    _ := screen.add(header_id, wordmark)
+    _ := screen.add(header_id, context)
+    stack_id := screen.add(basalam.RootId, stack_box)
+    body_id := screen.add(stack_id, body)
+    footer_id := screen.add(basalam.RootId, footer_box)
+    status_id := screen.add(footer_id, status)
+    keys_id := screen.add(footer_id, keys)
+    mode_id := screen.add(footer_id, mode)
+    _ := screen.add(basalam.RootId, degrade)
+    degrade.set_bounds(basalam.Rect { width = width, height = height })
+
+    ret Shell {
+        screen = screen, degrade = degrade, body_id = body_id, status_id = status_id, keys_id = keys_id,
+        mode_id = mode_id, width = width, height = height,
+    }
+end
+
+@en "NewTerminalShell"
+/// Builds the shell at the current terminal's size; `main.salam` calls this in
+/// STAGE-02. Uses NewShell, so the tree is the same tree the tests exercise.
+pub func NewTerminalShell(): Shell:
+    size := term.Size()
+    ret NewShell(size.cols, size.rows)
+end
