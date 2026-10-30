@@ -1,0 +1,166 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Terminal safety: the bytes that undo Screen.start(), one signal handler that
+// writes them for the four fatal signals, and the flag file that repairs a run
+// which died before either could happen.
+//
+// The bytes are basalam's own, in its own order (screen.salam, close()):
+// mouse-disable when mouse reporting was on, then term.Reset, show the cursor,
+// exit the alternate screen. mizrab never enables mouse reporting — NewScreen
+// leaves `mouse` and `mouse_motion` false and nothing here sets them — so
+// SeqDisableMouse is not in these bytes. A later stage that turns mouse on must
+// add it here as the prefix, or the cursor and screen are restored while the
+// terminal keeps reporting motion.
+//
+// Every sequence below is a no-op when already applied, so replaying it at the
+// next start, or from a signal after close() has run, is safe.
+
+package ui
+
+import filepath
+import mem
+import os
+import term
+
+extern:
+    func write(fd: int, buf: void *, n: int): i64
+    noret func _exit(code: int)
+    func signal(sig: int, handler: void *): void *
+    func tcgetattr(fd: int, t: void *): int
+    func tcsetattr(fd: int, act: int, t: void *): int
+end
+
+// Darwin and Linux agree on these four numbers, so there is no branch here.
+const _sigHup := 1
+const _sigInt := 2
+const _sigAbrt := 6
+const _sigTerm := 15
+
+// TCSAFLUSH is 2 on both Darwin and glibc, and is what basalam's close() uses.
+const _tcsFlush := 2
+
+// The largest termios of the two platforms is well under this; the buffer is
+// allocated once and only written by tcgetattr/tcsetattr.
+const _termiosCap := 256
+
+// The handler's only input, built once by InstallGuard and then read only. A
+// signal handler may not allocate, so no term.Emit (it formats and takes the
+// runtime's output lock), no term.Reset concatenation and no time.* can live in
+// the handler itself: the bytes and their length are made here and reused.
+mut _guardBytes := ""
+mut _guardLen := 0
+
+// The terminal mode before mutation, captured in Begin and restored by the
+// handler. The escape sequences alone leave the terminal in raw mode: measured
+// with a forced panic, `stty -a` after write-and-_exit still reported
+// `-icanon -isig -echo`, so the handler restores this too, the same way
+// close() does. Null until Begin captures it, and left unfilled when stdin is
+// not a terminal; the handler checks.
+mut _savedMode := null as void *
+mut _modeOk := false
+
+export:
+    // Installed for all four signals; one handler serves them and computes its
+    // own exit status. present() runs after every dispatch, so no frame bytes
+    // are pending when a signal lands: no flush is needed, and none is safe
+    // here. tcsetattr and write are both async-signal-safe.
+    func terminal_guard(sig: int):
+        _ := write(1, _guardBytes as void *, _guardLen)
+        if _modeOk:
+            _ := tcsetattr(term.StdinFd, _tcsFlush, _savedMode)
+        end
+        _exit(128 + sig)
+    end
+end
+
+@en "RestoreSequence"
+/// The bytes that undo Screen.start(), in basalam's own order: reset the
+/// attributes, show the cursor, leave the alternate screen. Mouse reporting is
+/// absent because mizrab never enables it. Pure: the signal handler never calls
+/// this, it reads the prebuilt copy.
+pub func RestoreSequence(): str:
+    ret term.Reset + term.SeqShowCursor() + term.SeqExitAltScreen()
+end
+
+@en "InstallGuard"
+/// Installs one Salam handler for SIGINT (2), SIGTERM (15), SIGHUP (1) and
+/// SIGABRT (6): it writes RestoreSequence() to fd 1, puts the terminal mode
+/// back, and then _exit(128 + sig). It replaces the runtime's handler for those
+/// signals, which costs nothing visible: the loop paints every iteration and so
+/// buffers no frame bytes. The flag file is the net for what this cannot catch:
+/// SIGKILL.
+pub func InstallGuard():
+    _guardBytes = RestoreSequence()
+    _guardLen = _guardBytes.len()
+    _ := signal(_sigInt, &terminal_guard)
+    _ := signal(_sigTerm, &terminal_guard)
+    _ := signal(_sigHup, &terminal_guard)
+    _ := signal(_sigAbrt, &terminal_guard)
+end
+
+@en "Begin"
+/// The start half of the guard, before the screen is opened: repair a terminal
+/// a previous run left dirty, remember the terminal mode the guard must put
+/// back, install the handler, then mark this run live with the flag file. An
+/// empty path skips the flag file and its repair — no state directory — and
+/// still installs the handler.
+pub func Begin(flagPath: str):
+    _ := RestoreIfDirty(flagPath, (s: str): term.Emit(s) end)
+    // Captured before Screen.start() calls MakeRaw, and once per process: a
+    // second Begin must not overwrite the pre-raw mode with a raw one.
+    if _savedMode == null:
+        _savedMode = mem.Allocate(_termiosCap as u64)
+        _modeOk = tcgetattr(term.StdinFd, _savedMode) == 0
+    end
+    InstallGuard()
+    if flagPath == "":
+        ret
+    end
+    // The state directory is created by whoever writes there first, so it may
+    // not exist yet; the flag is useless if it cannot be created.
+    _ := os.MkdirAll(filepath.Dir(flagPath))
+    _ := os.WriteFile(flagPath, "")
+end
+
+@en "End"
+/// The exit half: removes the flag file so the next start does not replay the
+/// sequence. A missing file, and an empty path, are not errors.
+pub func End(flagPath: str):
+    if flagPath == "" or not os.Exists(flagPath):
+        ret
+    end
+    _ := os.Remove(flagPath)
+end
+
+@en "RestoreIfDirty"
+/// Replays the restore sequence when the flag file says the previous run did
+/// not clean up, then removes the flag. Returns true when it emitted. The sink
+/// is a parameter so a test can record instead of writing to the terminal.
+pub func RestoreIfDirty(flagPath: str, emit: func (str)): bool:
+    if flagPath == "" or not os.Exists(flagPath):
+        ret false
+    end
+    emit(RestoreSequence())
+    _ := os.Remove(flagPath)
+    ret true
+end
+
+@en "IsTTY"
+/// True when stdin is a terminal, which is what main requires before it starts
+/// the player.
+pub func IsTTY(): bool:
+    ret term.IsTTY(term.StdinFd)
+end
