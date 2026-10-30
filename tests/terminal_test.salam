@@ -1,0 +1,109 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Terminal safety, headless: the restore bytes and their order, the flag-file
+// replay, IsTTY under the harness's /dev/null stdin, and Begin/End creating and
+// removing the flag. start() is never called, so nothing here touches a
+// terminal and the golden stays byte-exact.
+//
+// The flag lives under the system temporary directory, named with the pid, so a
+// run leaves nothing in the repository and two runs cannot collide.
+
+import conv
+import filepath
+import os
+import str
+import term
+import testing
+
+include "../ui/ui.salam"
+
+// The sink RestoreIfDirty reports to, so a test reads the bytes back instead of
+// writing them to the terminal. Package-level because a lambda captures by
+// value: a captured local Vector would be a copy and would stay empty.
+mut emitted := Vector {} as Vector<str>
+
+func record(s: str):
+    emitted.push(s)
+end
+
+func flag_path(): str:
+    ret filepath.Join(os.TempDir(), "mizrab-terminal-test-" + conv.FormatInt(os.Pid() as i64) + ".flag")
+end
+
+// The bytes are the literal basalam's close() sends for a screen that never
+// enabled mouse reporting, and the order is asserted by index beneath it.
+func test_restore_sequence():
+    seq := ui.RestoreSequence()
+    testing.AssertEqStr(seq, "\x1b[0m\x1b[?25h\x1b[?1049l")
+    testing.AssertEqStr(seq, term.Reset + term.SeqShowCursor() + term.SeqExitAltScreen())
+    testing.AssertEqInt(str.IndexOf(seq, term.Reset), 0)
+    show := str.IndexOf(seq, term.SeqShowCursor())
+    leave := str.IndexOf(seq, term.SeqExitAltScreen())
+    testing.AssertTrue(show > 0)
+    testing.AssertTrue(leave > show)
+    testing.AssertFalse(str.Contains(seq, term.SeqDisableMouse()))
+end
+
+// No flag: nothing is emitted, and the report says so.
+func test_restore_if_dirty_missing():
+    p := flag_path()
+    _ := os.Remove(p)
+    emitted.clear()
+    testing.AssertFalse(ui.RestoreIfDirty(p, (s: str): record(s) end))
+    testing.AssertEqInt(emitted.len(), 0)
+end
+
+// A flag left by a run that never cleaned up: exactly one emit, the whole
+// sequence, and the flag is gone afterwards.
+func test_restore_if_dirty_replays():
+    p := flag_path()
+    _ := os.WriteFile(p, "")
+    testing.AssertTrue(os.Exists(p))
+    emitted.clear()
+    testing.AssertTrue(ui.RestoreIfDirty(p, (s: str): record(s) end))
+    testing.AssertEqInt(emitted.len(), 1)
+    testing.AssertEqStr(emitted.get(0), ui.RestoreSequence())
+    testing.AssertFalse(os.Exists(p))
+end
+
+// run.sh redirects stdin from /dev/null, so this is also the assertion that
+// keeps a test from attaching to a terminal by accident.
+func test_is_tty():
+    testing.AssertFalse(ui.IsTTY())
+end
+
+// Begin creates the flag and End removes it; End on a missing file is not an
+// error, and Begin's own repair emits nothing because the flag was absent.
+func test_begin_end():
+    p := flag_path()
+    _ := os.Remove(p)
+    emitted.clear()
+    ui.Begin(p)
+    testing.AssertTrue(os.Exists(p))
+    testing.AssertEqInt(emitted.len(), 0)
+    ui.End(p)
+    testing.AssertFalse(os.Exists(p))
+    ui.End(p)
+end
+
+func main(): int:
+    test_restore_sequence()
+    test_restore_if_dirty_missing()
+    test_restore_if_dirty_replays()
+    test_is_tty()
+    test_begin_end()
+    ret testing.Summary()
+end

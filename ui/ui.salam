@@ -23,6 +23,9 @@
 //                 focus stops in ring order, and the refit and hint ladder
 //   loop.salam    Run: the one event loop — dispatch a key, apply the verbs it
 //                 reported, paint.
+//   terminal.salam
+//                 RestoreSequence, InstallGuard, Begin, End: the bytes and the
+//                 flag file that put the terminal back on every exit path.
 //
 // Imports basalam and nothing from the player: the keymap reports verbs to a
 // callback, so the interface layer does not know what playback is.
