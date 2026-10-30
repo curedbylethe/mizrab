@@ -356,3 +356,16 @@ pub func NewTerminalShell(): Shell:
     size := term.Size()
     ret NewShell(size.cols, size.rows)
 end
+
+@en "Open"
+/// Takes over the terminal: raw mode, alternate screen, hidden cursor. The only
+/// caller of Screen.start(), paired with Shell.Close. TickMs is set before it,
+/// because start() copies it into the input thread. A stdin that is not a
+/// terminal has nothing to attach to, so this is a no-op there; main refuses
+/// that case already, and it is what keeps a headless test headless.
+pub func Open(sh &: Shell):
+    if not IsTTY():
+        ret
+    end
+    sh.screen.start()
+end

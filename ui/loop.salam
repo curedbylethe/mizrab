@@ -60,14 +60,21 @@ end
 
 @en "Run"
 /// Runs the shell's event loop until `q` or an unconsumed Ctrl-C stops the
-/// screen. Installs the keymap (the screen then owns it) and arms ticks. The
-/// caller starts the screen before this and closes it after. `onCommand` runs
+/// screen. `flagPath` is the crash flag, or "" when no state directory was
+/// resolved: Begin repairs a terminal a previous run left dirty and installs
+/// the signal guard before the screen is opened, and End and Close are deferred
+/// around the loop so the order on the way out is close-then-clear. Installs
+/// the keymap (the screen then owns it) and arms ticks. `onCommand` runs
 /// on this thread between frames, after the event is dispatched and before the
 /// next paint, so a key takes effect in the frame it was read. `onTick` runs
 /// once per tick, before the tick is dispatched.
-pub func Run(sh &: Shell, onCommand: func (Command), onTick: func ()):
+pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func ()):
     sh.screen.tick_ms = TickMs
     sh.screen.set_keymap(_keymap())
+    Begin(flagPath)
+    defer End(flagPath)
+    Open(sh)
+    defer sh.Close()
     sh.screen.present()
     mut ev := basalam.Event {}
     until sh.screen.next_event(ev):
