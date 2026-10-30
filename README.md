@@ -3,28 +3,29 @@
 mizrab is a music player built on basalam: a terminal application written in
 the [Salam](https://github.com/SalamLang/Salam) programming language.
 
-> **Status: audio engine, playback controller and library scanner, no player
-> yet.** The audio engine exists: it decodes MP3, FLAC, WAV and OGG, streams
+> **Status: audio engine, playback controller, library scanner and app
+> shell.** The audio engine exists: it decodes MP3, FLAC, WAV and OGG, streams
 > them through a lock-free ring buffer to miniaudio's playback callback, and
 > runs headless on miniaudio's null backend, where its tests exercise it
 > ([the engine](https://mizrab.mintlify.app/audio-engine)). The playback
-> controller above it exists too: states, commands, position, a queue and error
-> text, tested the same way
+> controller above it owns the states, the commands, the position, the queue
+> and the error text
 > ([the controller](https://mizrab.mintlify.app/playback-controller)). The
-> binary uses neither yet. It does run the library scanner: `mizrab --scan
-> ROOT...` walks the roots, reads tags and writes a JSON index
-> ([the library](https://mizrab.mintlify.app/library)). It also reads a config
-> file at startup, and the repository carries a vim-ish keymap in `ui/`, which
-> the binary does not include
-> ([configuration](https://mizrab.mintlify.app/configuration)). Otherwise it
-> answers `--version` and `--help` and prints its usage when invoked bare. There
-> is no playback command and still no user interface; the first playable build
-> arrives when the command line gains a play command.
+> binary runs both: a bare `mizrab` with stdin a terminal opens the app shell
+> ([the shell](https://mizrab.mintlify.app/app-shell)), where `space`, `n` and
+> `p` are bound to play/pause, next and previous. With stdin not a terminal it
+> prints its usage block and exits 0, as it always has. It also runs the library
+> scanner:
+> `mizrab --scan ROOT...` walks the roots, reads tags and writes a JSON index
+> ([the library](https://mizrab.mintlify.app/library)). It reads a config file
+> at startup ([configuration](https://mizrab.mintlify.app/configuration)) and
+> answers `--version` and `--help`. The shell is not finished: `:` and `/`
+> record the request and open nothing yet.
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists. -->
 
-Screenshot: coming with the first playable build.
+Screenshot: pending. The shell runs, but no terminal capture is recorded yet.
 
 ## Documentation
 
@@ -61,9 +62,10 @@ make build
 make run
 ```
 
-At this commit `make run` prints the usage block, which lists `--version`,
-`--scan`, `--index`, `--config` and `--help`; a bare `./build/mizrab` prints the
-same block and exits 0. `./build/mizrab --scan ~/Music` scans a library and
+At this commit `make run` opens the app shell when its stdin is a terminal.
+With stdin not a terminal the binary prints the usage block, which lists
+`--version`, `--scan`, `--index`, `--config` and `--help`, and exits 0; a pipe
+or a script sees the block. `./build/mizrab --scan ~/Music` scans a library and
 prints a one-line summary. The roots and the index path can also come from
 `$XDG_CONFIG_HOME/mizrab/config.ini`; the flag beats the file and the file beats
 the defaults ([configuration](https://mizrab.mintlify.app/configuration)).
@@ -92,16 +94,13 @@ including `make help` and the opt-in `make soak`.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
-The player binary currently imports the Salam standard library (`conv`, `flag`,
-`os`) plus its own `commands`, `config` and `library` packages, and links the
-third C object, `build/library_shim.o`; the basalam import arrives with the
-application layer. `ui/` already exists, holds the keymap and imports basalam,
-and the binary does not include it. The `library` package additionally uses the
-`audio.tag` and `audio.flac` readers pinned in `salam.toml`, plus the standard
-library's JSON, crypto and filesystem packages. The audio engine uses
-`atomic`, `mem`, `sync` and `thread`, and is exercised by the tests, not by the
-binary. The `player` package is tested headlessly and is not yet included by
-the binary.
+The player binary imports the Salam standard library (`conv`, `flag`, `os`)
+plus its own `commands`, `config`, `library`, `ui` and `player` packages, and
+links the third C object, `build/library_shim.o`; basalam arrives through
+`ui/`. The `library` package additionally uses the `audio.tag` and `audio.flac`
+readers pinned in `salam.toml`, plus the standard library's JSON, crypto and
+filesystem packages. The audio engine uses `atomic`, `mem`, `sync` and
+`thread`, and the binary reaches it through `player/`, which it includes.
 
 ## Repository layout
 
@@ -109,8 +108,8 @@ the binary.
 vendored miniaudio and stb_vorbis plus the decode/ring/device engine, `player/`
 the playback controller, `library/` the scanner, tag readers and index,
 `config/` the XDG directory resolver and the config file reader with its
-commented sample, `ui/` the keymap, and `tests/` the harness and its audio
-fixtures.
+commented sample, `ui/` the shell, the keymap, the event loop, the terminal
+guard and the instance lock, and `tests/` the harness and its audio fixtures.
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
 every directory, and [configuration](https://mizrab.mintlify.app/configuration)
 covers the file `config/` reads.

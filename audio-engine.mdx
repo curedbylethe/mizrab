@@ -13,7 +13,7 @@ keywords:
 
 The audio engine is the decode, ring and device layer that turns an audio file into frames for a playback device. It lives in `audio/` as the Salam package `audio` (the package is every `audio/*.salam` file merged; `audio/audio.salam` adds the public verbs and `Status`) on top of the vendored miniaudio and stb_vorbis C sources. A decoder thread fills a lock-free ring buffer; miniaudio's audio thread drains it through an exported Salam callback. This page is the engine's record: what it supports, what Salam's atomics can and cannot do, every boundary policy, the status interface and what the soak run did and did not show. It builds on [the miniaudio spike](/spike-miniaudio), whose findings still stand.
 
-The engine is tested headlessly on miniaudio's null backend. No playback command exists yet: `main.salam` answers `--version`, `--help` and the library scan (`--scan`, `--index`), and nothing in the binary calls the engine.
+The engine is tested headlessly on miniaudio's null backend. The binary reaches it through `player/`: the [app shell](/app-shell) initialises the player on the real device, and its playback keys go through the controller to the engine. `main.salam` also answers `--version`, `--help` and the library scan (`--scan`, `--index`).
 
 ## Decoder support
 
@@ -286,4 +286,4 @@ This work does not widen what [the spike](/spike-miniaudio#what-was-not-verified
 - **No multi-engine.** Exactly one file and one device at a time.
 - **No real-device soak.** The soak is a virtual-clock frame-count and memory result on one macOS host. No hour of real-time playback was run, on any backend or device.
 - **CI legs not observed by this work.** The engine test runs inside `make test` on the Ubuntu and macOS legs of CI, but this work ran only on macOS; neither leg's result is claimed here.
-- **No playback command.** The binary does not call the engine yet.
+- **No audible result from the binary.** The shell starts the player on the real device, but there is no playlist yet, so no run of the binary has played a track. Every measured engine result is on the null backend.
