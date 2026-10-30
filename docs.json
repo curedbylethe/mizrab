@@ -32,7 +32,8 @@
         "pages": [
           "audio-engine",
           "playback-controller",
-          "spike-miniaudio"
+          "spike-miniaudio",
+          "app-shell"
         ]
       },
       {
