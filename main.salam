@@ -16,10 +16,17 @@
 import conv
 import flag
 import os
+import term
+import time
 
 include "commands/commands.salam"
 include "config/config.salam"
 include "library/library.salam"
+// ui before player: the LLVM backend resolves an enum member written in the
+// entry file against the first type of that name in the module, and both
+// packages declare a Command. Reordering makes ui.Command unnameable here.
+include "ui/ui.salam"
+include "player/player.salam"
 
 link static "build/miniaudio.o"
 link static "build/ma_shim.o"
@@ -104,6 +111,38 @@ func main:
         println "mizrab: scanned " + conv.FormatInt(count.total as i64) + " tracks: " + conv.FormatInt(count.added as i64) + " added, " + conv.FormatInt(count.updated as i64) + " updated, " + conv.FormatInt(count.removed as i64) + " removed"
         ret 0
     end
+    // A terminal gets the player; anything else gets the usage block, which is
+    // what every non-interactive caller (CI, a pipe) has always seen.
+    if term.IsTTY(term.StdinFd):
+        ret runShell()
+    end
     print flag.Usage(f)
     ret 0
+end
+
+// The UI path: build the one Shell, run the loop until it stops, and close the
+// screen on the way out. The defer lives here rather than in main so the flag
+// path and this one do not share a scope.
+func runShell(): int:
+    player.Init(false)
+    mut shell := ui.NewTerminalShell()
+    defer shell.Close()
+    // start() copies tick_ms into the input thread, so it is set first.
+    shell.screen.tick_ms = ui.TickMs
+    shell.screen.start()
+    ui.Run(shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) end)
+    ret 0
+end
+
+// The command handler: the only place in this file that touches the player.
+// The four focus moves never reach it (the keymap preset performs them);
+// OpenSearch and OpenCommandLine are CUR-508 and do nothing yet.
+func onCommand(command: ui.Command):
+    if command == ui.Command.PlayPause:
+        _ := player.Toggle()
+    else command == ui.Command.Next:
+        _ := player.Next()
+    else command == ui.Command.Prev:
+        _ := player.Prev()
+    end
 end
