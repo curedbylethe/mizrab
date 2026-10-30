@@ -122,21 +122,33 @@ func main:
     ret 0
 end
 
-// The UI path: build the one Shell and run the loop until it stops; the loop
-// owns Begin, Close and End, so the terminal teardown and the crash flag are in
-// one place. A state directory that cannot be resolved turns the flag file off
-// rather than stopping the player: a missing XDG directory must not be the
-// reason someone cannot play music.
+// The UI path: take the single-instance lock, then build the one Shell and run
+// the loop until it stops; the loop owns Begin, Close and End, so the terminal
+// teardown and the crash flag are in one place. The lock is taken before the
+// screen is opened and released by defer, so a second launch never installs a
+// handler or touches the terminal. A state directory that cannot be resolved
+// turns the lock and the flag off rather than stopping the player: a missing
+// XDG directory must not be the reason someone cannot play music.
 func runShell(): int:
     player.Init(false)
     shell := ui.NewTerminalShell()
     paths := config.FromEnv()
     mut flagPath := ""
     if paths.state == "":
-        io.EPrint("mizrab: cannot resolve a state directory; running without the terminal restore flag\n")
+        io.EPrint("mizrab: cannot resolve a state directory; running without the instance lock or the terminal restore flag\n")
     else:
         flagPath = filepath.Join(paths.state, "shell.flag")
     end
+    // Acquired before ui.Run opens the screen, so a second launch never
+    // installs a handler or touches the terminal. The defer is at function
+    // scope on purpose: inside a block it would run when the block ends, and
+    // the lock would be free for the whole session.
+    lock := ui.Acquire(ui.LockPath(paths))
+    if lock.path != "" and not lock.held:
+        io.EPrint(ui.BusyMessage(lock.path, lock.pid) + "\n")
+        ret 1
+    end
+    defer ui.Release(lock)
     ui.Run(flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) end)
     ret 0
 end

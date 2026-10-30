@@ -1,0 +1,108 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Single instance, headless: the lock path, the exclusive create, the refusal
+// that names the holder, the reclaim of a stale lock, and release. The lock
+// lives under the system temporary directory, named with the pid, so a run
+// leaves nothing in the repository and two runs cannot collide. No assertion
+// prints a pid: the expected message is built from os.Pid().
+
+import conv
+import filepath
+import os
+import str
+import testing
+
+include "../config/config.salam"
+include "../ui/ui.salam"
+
+func lock_path(): str:
+    ret filepath.Join(os.TempDir(), "mizrab-instance-test-" + conv.FormatInt(os.Pid() as i64) + ".lock")
+end
+
+func pid_text(): str:
+    ret conv.FormatInt(os.Pid() as i64)
+end
+
+// The state directory already ends in /mizrab, so it is not appended twice; an
+// unresolved one turns the lock off instead of naming a relative path.
+func test_lock_path():
+    testing.AssertEqStr(ui.LockPath(config.Paths { state = "/tmp/mizrab" }), "/tmp/mizrab/instance.lock")
+    testing.AssertEqStr(ui.LockPath(config.Paths {}), "")
+end
+
+// First launch: held, the file exists, and it holds this process's pid. A
+// second attempt in the same process sees that pid alive and refuses. Release
+// frees the file and a third attempt takes it. Release twice is not an error.
+func test_acquire_refuse_release():
+    p := lock_path()
+    _ := os.Remove(p)
+    first := ui.Acquire(p)
+    testing.AssertTrue(first.held)
+    testing.AssertEqInt(first.pid, 0)
+    testing.AssertTrue(os.Exists(p))
+    testing.AssertEqStr(os.ReadFile(p), pid_text())
+    second := ui.Acquire(p)
+    testing.AssertFalse(second.held)
+    testing.AssertEqInt(second.pid, os.Pid())
+    ui.Release(first)
+    testing.AssertFalse(os.Exists(p))
+    third := ui.Acquire(p)
+    testing.AssertTrue(third.held)
+    ui.Release(third)
+    ui.Release(third)
+end
+
+// The whole line, built from the pid and literals so the golden carries no real
+// process id, and one line so it survives a piped stdout.
+func test_busy_message():
+    p := lock_path()
+    msg := ui.BusyMessage(p, os.Pid())
+    want := "mizrab: already running (pid " + pid_text() + "); quit it, or remove " + p
+    testing.AssertEqStr(msg, want)
+    testing.AssertFalse(str.Contains(msg, "\n"))
+end
+
+// A crashed run leaves its pid behind; 999999 is not a live process here, so
+// the file is reclaimed and the pid replaced with this one.
+func test_reclaim_dead_pid():
+    p := lock_path()
+    _ := os.Remove(p)
+    _ := os.WriteFile(p, "999999")
+    l := ui.Acquire(p)
+    testing.AssertTrue(l.held)
+    testing.AssertEqStr(os.ReadFile(p), pid_text())
+    ui.Release(l)
+end
+
+// A lock whose contents are not a number is stale too: 0 is never a live pid,
+// because kill(0, 0) probes the caller's own group.
+func test_reclaim_garbage():
+    p := lock_path()
+    _ := os.Remove(p)
+    _ := os.WriteFile(p, "garbage")
+    l := ui.Acquire(p)
+    testing.AssertTrue(l.held)
+    ui.Release(l)
+end
+
+func main(): int:
+    test_lock_path()
+    test_acquire_refuse_release()
+    test_busy_message()
+    test_reclaim_dead_pid()
+    test_reclaim_garbage()
+    ret testing.Summary()
+end

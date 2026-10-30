@@ -1,0 +1,148 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Single instance: the lock file in the state directory, and the one line a
+// second launch prints instead of opening a second interface.
+//
+// Taken by main before the screen is opened, released on every normal exit. A
+// lock left behind by a killed run is reclaimed once its pid is found gone;
+// nothing raises the running instance, because std has no IPC primitive for it
+// and a fixed TCP port would be a worse design than a clear refusal.
+//
+// The lock is state, not data or cache: it says what a running process is doing
+// now, and a cache cleaner must not be able to free a live lock.
+
+package ui
+
+import conv
+import filepath
+import io
+import os
+
+include "../config/config.salam"
+
+extern:
+    func kill(pid: int, sig: int): int
+end
+
+// The file's name inside the state directory.
+const _lockName := "instance.lock"
+
+@en "Lock"
+/// One attempt at the single-instance lock. `held` is true when this process
+/// created the file; otherwise `pid` is the holder's pid, and 0 when the file
+/// named no usable pid. Build it with Acquire.
+pub struct Lock:
+    pub path: str = ""
+    pub held: bool = false
+    pub pid: int = 0
+end
+
+// kill(pid, 0) with a zero return means the process exists and this user may
+// signal it. A non-zero return is ESRCH (gone) or EPERM (another user's
+// process); EPERM cannot happen here, because the lock sits under this user's
+// own state directory and no other user can have written it. So non-zero means
+// stale, and std having no errno accessor does not matter.
+//
+// A non-positive pid is never probed: kill(0, 0) would probe this process's
+// whole group and report itself alive, so a lock naming no pid must be stale.
+func _alive(pid: int): bool:
+    if pid <= 0:
+        ret false
+    end
+    ret kill(pid, 0) == 0
+end
+
+// The pid a lock file names, or 0 when it is missing or empty. ParseInt reads a
+// leading integer and yields 0 when there is none, so a line that starts with
+// garbage is stale rather than live.
+func _readPid(path: str): int:
+    ret conv.Atoi(os.ReadFile(path))
+end
+
+// One attempt at the exclusive create: true when this process now owns the
+// file, false when it already existed. The pid is written through the same
+// handle, so no second open can race this one.
+func _take(path: str): bool:
+    f := os.Open(path, "wx")
+    if f == null:
+        ret false
+    end
+    _ := io.Write(f, conv.FormatInt(os.Pid() as i64))
+    io.Close(f)
+    ret true
+end
+
+@en "LockPath"
+/// The lock file, `instance.lock` inside the state directory, or "" when that
+/// directory is unresolved. Reads nothing and creates nothing.
+pub func LockPath(p: config.Paths): str:
+    if p.state == "":
+        ret ""
+    end
+    ret filepath.Join(p.state, _lockName)
+end
+
+@en "BusyMessage"
+/// The one line a refused launch prints on stderr: the pid holding the
+/// terminal, and the file to remove when that pid is not the culprit.
+pub func BusyMessage(path: str, pid: int): str:
+    ret "mizrab: already running (pid " + conv.FormatInt(pid as i64) + "); quit it, or remove " + path
+end
+
+@en "Acquire"
+/// Creates the lock and writes this process's pid into it; `held` is true when
+/// that worked. When the file is already there its pid is probed: a live holder
+/// is reported in `pid` and `held` stays false, while a stale or unparsable one
+/// is removed and the create retried exactly once. The retry is not a loop:
+/// the kernel's exclusive create settles a race between two launches. An empty
+/// path skips all of it, which keeps a run without a state directory possible.
+pub func Acquire(path: str): Lock:
+    mut l := Lock {}
+    l.path = path
+    if path == "":
+        ret l
+    end
+    // The state directory is created by whoever writes there first.
+    _ := os.MkdirAll(filepath.Dir(path))
+    if _take(path):
+        l.held = true
+        ret l
+    end
+    l.pid = _readPid(path)
+    if _alive(l.pid):
+        ret l
+    end
+    // Stale: remove it and retry once. If another launch wins the race the
+    // second create fails too, and the pid it reports is the winner's.
+    _ := os.Remove(path)
+    if _take(path):
+        l.held = true
+        l.pid = 0
+        ret l
+    end
+    l.pid = _readPid(path)
+    ret l
+end
+
+@en "Release"
+/// Removes the lock file this attempt holds. Not an error when the file is
+/// already gone, and a no-op when this attempt never held it.
+pub func Release(l: Lock):
+    if not l.held:
+        ret
+    end
+    _ := os.Remove(l.path)
+end
