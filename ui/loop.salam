@@ -67,7 +67,9 @@ end
 /// the keymap (the screen then owns it) and arms ticks. `onCommand` runs
 /// on this thread between frames, after the event is dispatched and before the
 /// next paint, so a key takes effect in the frame it was read. `onTick` runs
-/// once per tick, before the tick is dispatched.
+/// once per tick, before the tick is dispatched. A resize reaches the shell
+/// before dispatch, which resizes the screen alone: the shell owns the degrade
+/// cover's bounds and the size Degraded() reports.
 pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func ()):
     sh.screen.tick_ms = TickMs
     sh.screen.set_keymap(_keymap())
@@ -80,9 +82,24 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
     until sh.screen.next_event(ev):
         if ev.kind == basalam.TickEvent:
             onTick()
+            // The terminal size is polled here because basalam's winch thread
+            // exits at once: its sigwait reports no signal, so its ResizeEvent
+            // never arrives and the tree would keep the size start() gave it.
+            // One ioctl per tick catches a resize within TickMs.
+            size := term.Size()
+            if size.cols > 0 and size.rows > 0:
+                if sh.screen.buffer.width != size.cols or sh.screen.buffer.height != size.rows:
+                    sh.Resize(size.cols, size.rows)
+                end
+            end
             sh.screen.dirty = true
         end
         consumed := sh.screen.dispatch(ev)
+        if ev.kind == basalam.ResizeEvent:
+            // After dispatch, not before: dispatch resizes the screen and lays
+            // the root out again, which would overwrite the cover's bounds.
+            sh.Resize(ev.width, ev.height)
+        end
         _drain(onCommand)
         // basalam's own rule, restated because this loop owns the iteration.
         if not consumed and ev.is_ctrl("c"):
