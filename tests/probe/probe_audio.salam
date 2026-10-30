@@ -1,0 +1,62 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The play/stop churn driver, used by tests/leaks.sh. Not a test: the name has
+// no _test suffix, so tests/run.sh never discovers it.
+//
+// Plays and stops fixtures/tone.wav twenty times on miniaudio's null backend,
+// so every cycle opens a file, spawns the decoder thread, creates the device
+// and tears both down again. Then it prints its pid and holds still for twenty
+// seconds, which is long enough for an outside sampler to count file
+// descriptors and threads at two points and see whether the churn left
+// anything behind. Exit 1 on the first cycle that fails to start.
+
+import conv
+import os
+import sync
+
+link static "../../build/miniaudio.o"
+link static "../../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../../player/player.salam"
+
+// The fixture tests/player_test.salam already plays; no new fixture.
+const _FIXTURE := "fixtures/tone.wav"
+
+const _CYCLES := 20
+
+// The idle window the sampler needs: 3 s and 8 s samples plus the margin that
+// keeps the process alive after the second one.
+const _IDLE_MS := 20000
+
+func main():
+    player.Init(true)
+    repeat _CYCLES:
+        if not player.Play(_FIXTURE):
+            println "probe_audio: play failed: " + player.LastErrorText() + ": " + player.LastErrorDetail()
+            ret 1
+        end
+        _ := player.Stop()
+    end
+    println "pid=" + conv.FormatInt(os.Pid() as i64)
+    sync.SleepMs(_IDLE_MS)
+    ret 0
+end
