@@ -14,7 +14,9 @@
  */
 
 import conv
+import filepath
 import flag
+import io
 import os
 import term
 import time
@@ -120,17 +122,22 @@ func main:
     ret 0
 end
 
-// The UI path: build the one Shell, run the loop until it stops, and close the
-// screen on the way out. The defer lives here rather than in main so the flag
-// path and this one do not share a scope.
+// The UI path: build the one Shell and run the loop until it stops; the loop
+// owns Begin, Close and End, so the terminal teardown and the crash flag are in
+// one place. A state directory that cannot be resolved turns the flag file off
+// rather than stopping the player: a missing XDG directory must not be the
+// reason someone cannot play music.
 func runShell(): int:
     player.Init(false)
-    mut shell := ui.NewTerminalShell()
-    defer shell.Close()
-    // start() copies tick_ms into the input thread, so it is set first.
-    shell.screen.tick_ms = ui.TickMs
-    shell.screen.start()
-    ui.Run(shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) end)
+    shell := ui.NewTerminalShell()
+    paths := config.FromEnv()
+    mut flagPath := ""
+    if paths.state == "":
+        io.EPrint("mizrab: cannot resolve a state directory; running without the terminal restore flag\n")
+    else:
+        flagPath = filepath.Join(paths.state, "shell.flag")
+    end
+    ui.Run(flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) end)
     ret 0
 end
 
