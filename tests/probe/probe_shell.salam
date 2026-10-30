@@ -1,0 +1,49 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The headless startup/shutdown instrument, driven by tests/shell-measure.sh.
+// Not a test: the name has no _test suffix, so tests/run.sh never discovers it,
+// and the numbers depend on the machine, so nothing asserts them.
+//
+// Startup is measured from before config.FromEnv() to after the first frame:
+// config resolution, NewShell(100, 30), draw() and present(). present() never
+// flushes because start() is not called, so no terminal is touched and no
+// audio device is opened. Shutdown is Close(), which is Screen.close(): the
+// restore bytes, the two thread joins and the frees.
+//
+// Prints exactly `startup_us=N shutdown_us=M` and nothing else on stdout.
+
+import conv
+import time
+
+include "../../config/config.salam"
+include "../../ui/ui.salam"
+
+const _WIDTH := 100
+
+const _HEIGHT := 30
+
+func main():
+    t0 := time.MonoNanos()
+    _ := config.FromEnv()
+    mut shell := ui.NewShell(_WIDTH, _HEIGHT)
+    shell.screen.draw()
+    shell.screen.present()
+    t1 := time.MonoNanos()
+    shell.Close()
+    t2 := time.MonoNanos()
+    println "startup_us=" + conv.FormatInt((t1 - t0) / 1000) + " shutdown_us=" + conv.FormatInt((t2 - t1) / 1000)
+    ret 0
+end
