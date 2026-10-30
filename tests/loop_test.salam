@@ -1,0 +1,98 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives ui.Run headless: events are posted before the run, so the loop is
+// deterministic and terminates on `q`. start() is never called, so present()
+// never flushes and the golden stays byte-exact. The handler is a recorder
+// instead of the player, which is why the loop takes a callback.
+
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../ui/ui.salam"
+
+// The verbs the loop applied and the ticks it delivered. Package globals
+// because a lambda captures by value: a captured local Vector would be a copy
+// and would stay empty, as tests/keymap_test.salam records.
+mut applied := Vector {} as Vector<ui.Command>
+
+mut ticks := 0
+
+// The recorder the loop reports to: the player's place in production.
+func record(command: ui.Command):
+    applied.push(command)
+end
+
+// One decoded key press, the shape the input thread posts.
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+// The four keys arrive in order, and the loop reports the three verbs the
+// keymap owns; `q` stops the loop instead of reporting anything.
+func test_keys_become_commands():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    applied.clear()
+    _ := shell.screen.post(key(" "))
+    _ := shell.screen.post(key("n"))
+    _ := shell.screen.post(key("p"))
+    _ := shell.screen.post(key("q"))
+
+    ui.Run(shell, (command: ui.Command): record(command) end, (): end)
+    testing.AssertEqInt(applied.len(), 3)
+    testing.AssertTrue(applied.get(0) == ui.Command.PlayPause)
+    testing.AssertTrue(applied.get(1) == ui.Command.Next)
+    testing.AssertTrue(applied.get(2) == ui.Command.Prev)
+
+    // The run above stopped the screen, so a second call returns at once.
+    applied.clear()
+    ui.Run(shell, (command: ui.Command): record(command) end, (): end)
+    testing.AssertEqInt(applied.len(), 0)
+end
+
+// A tick calls onTick and reports no command; the loop keeps going until `q`.
+func test_tick_is_not_a_command():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    applied.clear()
+    ticks = 0
+    _ := shell.screen.post(basalam.Event { kind = basalam.TickEvent })
+    _ := shell.screen.post(key("q"))
+
+    ui.Run(shell, (command: ui.Command): record(command) end, (): ticks = ticks + 1 end)
+    testing.AssertEqInt(shell.screen.tick_ms, ui.TickMs)
+    testing.AssertEqInt(ticks, 1)
+    testing.AssertEqInt(applied.len(), 0)
+end
+
+// `q` as the very first event stops the screen before any verb is applied.
+func test_quit_first_returns_immediately():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    applied.clear()
+    _ := shell.screen.post(key("q"))
+
+    ui.Run(shell, (command: ui.Command): record(command) end, (): end)
+    testing.AssertEqInt(applied.len(), 0)
+end
+
+func main(): int:
+    test_keys_become_commands()
+    test_tick_is_not_a_command()
+    test_quit_first_returns_immediately()
+    ret testing.Summary()
+end

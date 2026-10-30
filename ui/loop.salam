@@ -1,0 +1,88 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The one event loop: read an event, let the screen dispatch it, apply the
+// commands the keymap reported, then paint. Ticks are basalam's own: start()
+// copies tick_ms into the input thread, which posts a TickEvent from its poll
+// timeout, so this loop spawns no timer of its own. The command sink runs
+// inside dispatch, on this thread, so the pending list needs no lock.
+//
+// Nothing here names the player: the loop reports verbs to onCommand and reads
+// the clock through onTick, so main supplies both and this file stays the only
+// place that knows the frame order.
+
+package ui
+
+import term
+import "github.com/curedbylethe/basalam/basalam"
+
+@en "TickMs"
+/// The tick interval in milliseconds: it refreshes the position display at
+/// 10 Hz and is not an audio parameter. Set it before Screen.start().
+pub const TickMs := 100
+
+// Verbs the keymap reported and the loop has not applied yet. A lambda
+// captures by value, so the sink cannot own a local vector; one loop runs at a
+// time, which is what makes a package-level list safe.
+mut pending := Vector {} as Vector<Command>
+
+// The map the loop installs: Vim plus `q`, which is the application's alone.
+// Esc stays unbound here: the preset uses it for pop_focus and CUR-508 owns it.
+func _keymap(): basalam.Keymap:
+    mut km := Vim((command: Command): pending.push(command) end)
+    km.bind(
+        term.Decode("q"), (screen: basalam.Screen*, event: basalam.Event): screen[0].stop() ret true end
+    )
+    ret km
+end
+
+// Applies the verbs in the order the keys arrived, then empties the list.
+func _drain(onCommand: func (Command)):
+    mut i := 0
+    until i < pending.len():
+        onCommand(pending.get(i))
+        i = i + 1
+    end
+    pending.clear()
+end
+
+@en "Run"
+/// Runs the shell's event loop until `q` or an unconsumed Ctrl-C stops the
+/// screen. Installs the keymap (the screen then owns it) and arms ticks. The
+/// caller starts the screen before this and closes it after. `onCommand` runs
+/// on this thread between frames, after the event is dispatched and before the
+/// next paint, so a key takes effect in the frame it was read. `onTick` runs
+/// once per tick, before the tick is dispatched.
+pub func Run(sh &: Shell, onCommand: func (Command), onTick: func ()):
+    sh.screen.tick_ms = TickMs
+    sh.screen.set_keymap(_keymap())
+    sh.screen.present()
+    mut ev := basalam.Event {}
+    until sh.screen.next_event(ev):
+        if ev.kind == basalam.TickEvent:
+            onTick()
+            sh.screen.dirty = true
+        end
+        consumed := sh.screen.dispatch(ev)
+        _drain(onCommand)
+        // basalam's own rule, restated because this loop owns the iteration.
+        if not consumed and ev.is_ctrl("c"):
+            sh.screen.stop()
+        end
+        // present() returns at once when nothing changed, which is the same
+        // guard basalam's loop spells with its private region list.
+        sh.screen.present()
+    end
+end
