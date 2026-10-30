@@ -63,6 +63,8 @@ The context text is a placeholder and stays one until CUR-508 supplies a real va
 
 **Below 60 columns or 12 rows the tree is replaced.** The whole `Column` gives way to one centred line, `too small · 60 × 12`, in bright black. `60 × 12` itself is still the drawn layout; only less than that degrades.
 
+**A resize is picked up within one tick.** basalam's own resize event never arrives — its SIGWINCH watcher leaves its loop as soon as `sigwait` reports no signal — so the loop compares the terminal size against the buffer on every tick and refits the tree and the cover when they differ. Shrinking a live shell from 100 × 30 to 50 × 10 replaces the tree with the `too small` line, and growing it back restores the tree.
+
 ## Terminal safety
 
 Opening the shell means raw mode, the alternate screen and a hidden cursor. Every exit the process controls puts them back:
@@ -93,11 +95,11 @@ Both plain outputs survive stdout piped: the refusal above and the usage block a
 
 ## Startup and shutdown
 
-**Method.** `tests/shell-measure.sh` builds and runs `tests/probe/probe_shell.salam` twelve times, once at a time, after a prior `make build`. The probe resolves the config, records `time.MonoNanos()`, constructs the shell, calls `draw()` and `present()` once, records again, then calls `Screen.close()` and records again. The script prints every raw value and a min / median / max table with the host, `salam version` and the date in the header. It is run by hand: not a make target, not run by CI, matching `tests/gap.sh`.
+**Method.** `tests/shell-measure.sh` builds and runs `tests/probe/probe_shell.salam` twelve times, once at a time, after a prior `make build`. Each run executes under a pty (`script -q /dev/null`), because a screen that is not attached to a terminal never starts and never joins anything. The probe resolves the config, takes and releases the instance lock, then records `time.MonoNanos()` and runs what the binary runs: `Begin` (the flag repair and the signal guard), `NewTerminalShell`, the tick interval, `Open` — raw mode, the alternate screen, the cursor, the input thread — and the first `present()`. It records again, then times `Close()` — the restore bytes, the terminal mode, and the join of the input thread — followed by `End`. The script prints every raw value and a min / median / max table with the host, `salam version` and the date in the header. It is run by hand: not a make target, not run by CI, matching `tests/gap.sh`.
 
-**What the number covers.** The startup figure spans config resolution, shell construction and the first `present()`, on the **null** audio backend. That scope is what makes runs comparable: it does not include opening a real device, which would put the machine's audio stack in the number. The shutdown figure covers `Screen.close()`: the restore bytes, the two thread joins and the frees.
+**What the number covers.** The startup figure is what a user waits from process start to the first painted frame: config resolution sits just outside it, and the device is never opened, which is what makes runs comparable across machines. The shutdown figure is a real join, not a free: the input thread waits in a poll with a 20 ms ceiling, so the figure is dominated by that join and lands just above it. That is the number a user waits for the prompt to come back, and it is three orders of magnitude larger than the free of an unstarted screen.
 
-**Recorded result.** 12 runs, one at a time.
+**Recorded result.** 12 runs, one at a time, under a pty.
 
 | Item | Value |
 | --- | --- |
@@ -105,27 +107,29 @@ Both plain outputs survive stdout piped: the refusal above and the usage block a
 | Compiler | Salam 0.5.9 |
 | Backend | `null`, no device opened |
 | Runs | 12 |
-| Date | 2026-10-31 00:19:08 +0330 |
-| Startup `startup_us`, min / median / max | 154 / 177 / 422 |
-| Shutdown `shutdown_us`, min / median / max | 3 / 12 / 97 |
+| Date | 2026-10-31 01:17:18 +0330 |
+| Startup `startup_us`, min / median / max | 627 / 876 / 1880 |
+| Shutdown `shutdown_us`, min / median / max | 20831 / 21192 / 22345 |
 
-The runs, in order, as `startup_us` then `shutdown_us`: 165/13, 167/97, 391/14, 176/15, 186/10, 187/10, 172/12, 154/12, 178/20, 422/3, 172/10, 346/11
+The runs, in order, as `startup_us` then `shutdown_us`: 1449/21106, 689/22345, 778/20857, 1033/21226, 1163/21051, 900/21566, 1384/21107, 774/21371, 627/20831, 842/21229, 852/21158, 1880/21397
 
 The spread is real: the number depends on the machine, its load and the process start, so treat it as a range for this host, and re-run the script rather than quote a single value.
 
 ## Leaks
 
-**Method.** `tests/leaks.sh` starts `tests/probe/probe_audio.salam`, which plays and stops one fixture twenty times on the null backend, prints its pid and sleeps, so an outside sampler can compare an early process against a settled one. The script samples `lsof -p <pid>` for file descriptors and `ps -M <pid>` for threads at **3 s** and at **8 s**, and prints both counts and the delta.
+**Method.** `tests/leaks.sh` runs the same probe three times: once with no playback and no screen, which is the baseline; once with twenty play/stop cycles of one fixture on the null backend; and once with a real shell open under a pty. Each run prints its pid and holds still, and the script samples `lsof -p <pid>` for open files and `ps -M <pid>` for threads at **3 s** and at **8 s**. Every run gets its own two samples and delta, and each of the last two is compared against the baseline, so the count from after the churn has a count from before it to sit against.
 
-**Child processes are zero by construction.** The shell spawns none: the only process facilities in the tree are unused, so the page states the count instead of measuring it. It does run the screen's own threads, which is why threads are sampled rather than assumed.
-
-| Sample point | File descriptors | Threads |
+| Run | Files at 3 s / 8 s | Threads at 3 s / 8 s |
 | --- | --- | --- |
-| 3 s | 6 | 1 |
-| 8 s | 6 | 1 |
-| Delta | 0 | 0 |
+| Baseline: no churn, no screen | 6 / 6 | 1 / 1 |
+| Twenty play/stop cycles | 6 / 6 | 1 / 1 |
+| Shell open, no churn | 6 / 6 | 2 / 2 |
 
-**This is sampling, not proof of absence.** Two points say the counts did not grow between them on this host in this run; they do not prove that nothing leaks on another path, another backend or a longer session. A non-zero delta is a result to report, not to round away.
+**Against the baseline.** The churn costs nothing: zero more files and zero more threads after twenty open/play/stop/close cycles than before any. A running shell holds one more thread than an idle process — the screen's input thread, parked in its poll. It is one, not two, because basalam's SIGWINCH watcher leaves its loop immediately when `sigwait` reports no signal; that is also why the loop polls the terminal size on each tick instead of waiting for a resize event.
+
+**Child processes are zero by construction.** The shell spawns none, so the page states the count instead of measuring it.
+
+**This is sampling, not proof of absence.** Each run's two points say the counts did not grow between them on this host in this run; they do not prove that nothing leaks on another path, another backend or a longer session. A non-zero delta is a result to report, not to round away.
 
 ## Upstream findings
 
