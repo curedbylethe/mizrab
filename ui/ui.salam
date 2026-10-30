@@ -19,6 +19,8 @@
 //
 //   keymap.salam  Command, and Vim(sink): the basalam vim preset plus the four
 //                 application keys (space, n, p, :)
+//   shell.salam   Shell: the one Screen, the root Row/Stack/Row tree, the four
+//                 focus stops in ring order, and the refit and hint ladder
 //
 // Imports basalam and nothing from the player: the keymap reports verbs to a
 // callback, so the interface layer does not know what playback is.
