@@ -1,0 +1,329 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The library view: the index flattened into the rows a list draws, the filter
+// that narrows them, the cursor, and the playing row. The state is package
+// level for the reason loop.salam's pending list is: a widget is a boxed copy,
+// so the panels read the view at render time and no copy can go stale.
+//
+// Order is LoadIndex order, the raw path bytes; filtering never reorders. A row
+// copies the strings it shows: Track.path borrows the walk entry, so a row must
+// not hold a &Track past the load (library/track.salam:83-85).
+//
+// Durations are formatted at display time. The index stores 0 for every format
+// but FLAC, so 0 and -1 both print --:--.
+
+package ui
+
+import mem
+import str
+import unicode
+
+include "../library/library.salam"
+
+// Loaded rows, in LoadIndex order.
+mut _rows := Vector {} as Vector<Row>
+
+// Indices into _rows, in index order: the rows the current filter keeps.
+mut _visible := Vector {} as Vector<int>
+
+mut _query := ""
+
+mut _cursor := 0
+
+mut _playing := ""
+
+mut _changed := false
+
+@en "Row"
+/// One playlist line: the four strings it draws and the duration to format.
+pub struct Row:
+    pub path: str = ""
+    pub title: str = ""
+    pub artist: str = ""
+    pub album: str = ""
+    pub durationMs: i64 = 0
+end
+
+func _freeStr(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _dropRows():
+    mut i := 0
+    until i < _rows.len():
+        r := _rows.get(i)
+        _freeStr(r.path)
+        _freeStr(r.title)
+        _freeStr(r.artist)
+        _freeStr(r.album)
+        i = i + 1
+    end
+    _rows.clear()
+end
+
+// The pin's str.Lower is the builtin lower(), which only folds ASCII, so the
+// comparison folds its own copy. shortcut: one codepoint in, one out, so a
+// full fold such as ß→ss does not match; upgrade if that ever matters.
+func _fold(s: str): str:
+    cps := str.CodePoints(s)
+    defer cps.free()
+    mut i := 0
+    until i < cps.len():
+        cps.set(i, unicode.ToFold(cps.get(i)))
+        i = i + 1
+    end
+    ret str.FromCodePoints(cps)
+end
+
+// artist + " " + title + " " + album, folded, then searched. Folding each
+// haystack fresh keeps a case-sensitive query from needing its own table.
+func _matches(r: Row, needle: str): bool:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, r.artist)
+    str.BufAppendChar(b, 32)
+    str.BufAppend(b, r.title)
+    str.BufAppendChar(b, 32)
+    str.BufAppend(b, r.album)
+    raw := str.BufStr(b)
+    hay := _fold(raw)
+    ok := str.Contains(hay, needle)
+    _freeStr(raw)
+    _freeStr(hay)
+    ret ok
+end
+
+func _clampCursor():
+    n := _visible.len()
+    if n == 0:
+        _cursor = 0
+        ret
+    end
+    if _cursor < 0:
+        _cursor = 0
+    end
+    if _cursor >= n:
+        _cursor = n - 1
+    end
+end
+
+func _rebuild():
+    _visible.clear()
+    needle := _fold(_query)
+    mut i := 0
+    until i < _rows.len():
+        if needle.len() == 0 or _matches(_rows.get(i), needle):
+            _visible.push(i)
+        end
+        i = i + 1
+    end
+    _freeStr(needle)
+    _clampCursor()
+end
+
+func _load(idx: library.Index): int:
+    _dropRows()
+    mut i := 0
+    until i < idx.tracks.len():
+        t := idx.tracks.get(i)
+        _rows.push(
+            Row {
+                path = str.Clone(t.path), title = str.Clone(t.title), artist = str.Clone(t.artist),
+                album = str.Clone(t.album), durationMs = t.durationMs,
+            }
+        )
+        i = i + 1
+    end
+    _freeStr(_query)
+    _query = ""
+    _cursor = 0
+    _rebuild()
+    _changed = true
+    ret _rows.len()
+end
+
+// m:ss, or mm:ss when `clock` asks for two minute digits.
+func _duration(ms: i64, clock: bool): str:
+    if ms <= 0:
+        ret "--:--"
+    end
+    total := ms / 1000
+    m := total / 60
+    s := total % 60
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if clock and m < 10:
+        str.BufAppendChar(b, 48)
+    end
+    str.BufAppendInt(b, m)
+    str.BufAppendChar(b, 58)
+    if s < 10:
+        str.BufAppendChar(b, 48)
+    end
+    str.BufAppendInt(b, s)
+    ret str.BufStr(b)
+end
+
+@en "LibraryLoad"
+/// Loads the index at `indexPath` into the view and returns the number of rows
+/// loaded; a missing or damaged index loads zero rows. Resets the filter and the
+/// cursor. Never fails, because LoadIndex never does.
+pub func LibraryLoad(indexPath: str): int:
+    ret _load(library.LoadIndex(indexPath))
+end
+
+@en "LibraryLoadIndex"
+/// Loads an already decoded index into the view and returns the number of rows
+/// loaded. Same reset as LibraryLoad; the entry point the in-memory fixtures use.
+pub func LibraryLoadIndex(idx: library.Index): int:
+    ret _load(idx)
+end
+
+@en "LibraryRows"
+/// The number of loaded rows, before filtering.
+pub func LibraryRows(): int:
+    ret _rows.len()
+end
+
+@en "LibraryFilter"
+/// Rebuilds the visible order for `query`: a case-insensitive substring match
+/// over artist, title and album. The empty query keeps every row. Index order
+/// is preserved and the cursor is clamped into the new list.
+pub func LibraryFilter(query: str):
+    _freeStr(_query)
+    _query = str.Clone(query)
+    _rebuild()
+    _changed = true
+end
+
+@en "LibraryQuery"
+/// The filter in force, as it was passed to LibraryFilter.
+pub func LibraryQuery(): str:
+    ret _query
+end
+
+@en "LibraryVisibleCount"
+/// The number of rows the current filter keeps.
+pub func LibraryVisibleCount(): int:
+    ret _visible.len()
+end
+
+@en "LibraryMove"
+/// Moves the cursor by `delta` rows and clamps at both ends; it never wraps.
+pub func LibraryMove(delta: int):
+    n := _visible.len()
+    if n > 0:
+        mut pos := _cursor + delta
+        if pos < 0:
+            pos = 0
+        end
+        if pos >= n:
+            pos = n - 1
+        end
+        _cursor = pos
+    end
+    _changed = true
+end
+
+@en "LibrarySetCursor"
+/// Puts the cursor at visible position `pos`; returns false and changes nothing
+/// when `pos` is outside the visible list.
+pub func LibrarySetCursor(pos: int): bool:
+    if pos < 0 or pos >= _visible.len():
+        ret false
+    end
+    _cursor = pos
+    _changed = true
+    ret true
+end
+
+@en "LibraryCursor"
+/// The cursor as a visible position, 0 when nothing is visible.
+pub func LibraryCursor(): int:
+    ret _cursor
+end
+
+@en "LibraryRowAt"
+/// The row at visible position `pos`; a zero Row when `pos` is out of range.
+pub func LibraryRowAt(pos: int): Row:
+    if pos < 0 or pos >= _visible.len():
+        ret Row {}
+    end
+    ret _rows.get(_visible.get(pos))
+end
+
+@en "LibrarySelectedPath"
+/// The path at the cursor, or "" when nothing is visible.
+pub func LibrarySelectedPath(): str:
+    ret LibraryRowAt(_cursor).path
+end
+
+@en "LibrarySelectedRow"
+/// The row at the cursor, or a zero Row when nothing is visible.
+pub func LibrarySelectedRow(): Row:
+    ret LibraryRowAt(_cursor)
+end
+
+@en "SetPlaying"
+/// Records the path the player reports, so the list can mark that row. The
+/// comparison is by exact path; the view keeps its own copy.
+pub func SetPlaying(path: str):
+    _freeStr(_playing)
+    _playing = str.Clone(path)
+    _changed = true
+end
+
+@en "LibraryPlayingRow"
+/// The visible position of the playing row, or -1 when it is not visible.
+pub func LibraryPlayingRow(): int:
+    if _playing.len() == 0:
+        ret 0 - 1
+    end
+    mut i := 0
+    until i < _visible.len():
+        if _rows.get(_visible.get(i)).path == _playing:
+            ret i
+        end
+        i = i + 1
+    end
+    ret 0 - 1
+end
+
+@en "ViewChanged"
+/// True after a mutator since the last ClearViewChanged; the loop drains it.
+pub func ViewChanged(): bool:
+    ret _changed
+end
+
+@en "ClearViewChanged"
+/// Forgets the pending repaint request.
+pub func ClearViewChanged():
+    _changed = false
+end
+
+@en "DurationShort"
+/// A duration as `m:ss`, or `--:--` when it is not known (`ms <= 0`).
+pub func DurationShort(ms: i64): str:
+    ret _duration(ms, false)
+end
+
+@en "DurationClock"
+/// A duration as `mm:ss`, or `--:--` when it is not known (`ms <= 0`).
+pub func DurationClock(ms: i64): str:
+    ret _duration(ms, true)
+end
