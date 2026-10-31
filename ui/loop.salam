@@ -82,16 +82,6 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
     until sh.screen.next_event(ev):
         if ev.kind == basalam.TickEvent:
             onTick()
-            // The terminal size is polled here because basalam's winch thread
-            // exits at once: its sigwait reports no signal, so its ResizeEvent
-            // never arrives and the tree would keep the size start() gave it.
-            // One ioctl per tick catches a resize within TickMs.
-            size := term.Size()
-            if size.cols > 0 and size.rows > 0:
-                if sh.screen.buffer.width != size.cols or sh.screen.buffer.height != size.rows:
-                    sh.Resize(size.cols, size.rows)
-                end
-            end
             sh.screen.dirty = true
         end
         consumed := sh.screen.dispatch(ev)
