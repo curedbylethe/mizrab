@@ -1,0 +1,212 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The command line's grammar and its completion table. The parser lives in
+// `ui` so the popup and the tests have one source of truth; the executor lives
+// in main.salam, because `ui` cannot name the player.
+//
+// `Verb.arg` is the one allocation in a successful parse: the drain in
+// loop.salam frees it after the sink returns, so a sink must not keep it.
+// Error text and completion rows are borrowed literals.
+
+package ui
+
+import conv
+import str
+
+@en "Verb"
+/// One parsed command: the verb name and its argument. `name` is "" when the
+/// text did not name a verb; `arg` is owned by whoever received the Verb.
+pub struct Verb:
+    pub name: str = ""
+    pub arg: str = ""
+end
+
+@en "Parsed"
+/// The parser's answer: whether the text is a command, the verb when it is,
+/// and the message when it is not ("" for an empty prompt).
+pub struct Parsed:
+    pub ok: bool = false
+    pub verb: Verb = Verb {}
+    pub error: str = ""
+end
+
+// A non-empty run of decimal digits. ParseInt never fails and stops at the
+// first non-digit, so this loop is the validation.
+func _digits(s: str): bool:
+    cps := str.CodePoints(s)
+    defer cps.free()
+    if cps.len() == 0:
+        ret false
+    end
+    mut i := 0
+    until i < cps.len():
+        if not str.IsDigit(cps.get(i)):
+            ret false
+        end
+        i = i + 1
+    end
+    ret true
+end
+
+// The arity error for the verbs that take none, as a literal.
+func _noArgs(name: str): str:
+    if name == "pause":
+        ret "pause takes no arguments"
+    else name == "next":
+        ret "next takes no arguments"
+    else name == "prev":
+        ret "prev takes no arguments"
+    end
+    ret "quit takes no arguments"
+end
+
+// The completion table, in display order. A trailing space marks the verbs that
+// take an argument (stage 07 inserts `help ` after prev).
+func _table(): Vector<str>:
+    mut t := Vector {} as Vector<str>
+    t.push("next")
+    t.push("pause")
+    t.push("play")
+    t.push("prev")
+    t.push("quit")
+    t.push("search ")
+    t.push("seek ")
+    t.push("volume ")
+    ret t
+end
+
+@en "Parse"
+/// Parses `text` per the command grammar: trimmed, split at the first space,
+/// then one of play (0-1), search (1), seek and volume (a validated number),
+/// pause, next, prev, q and quit (0). An empty prompt is `ok = false` with no
+/// error, so Enter on it only closes.
+pub func Parse(text: str): Parsed:
+    t := str.Trim(text)
+    if t == "":
+        _freeStr(t)
+        ret Parsed { ok = false, error = "" }
+    end
+    idx := str.IndexOf(t, " ")
+    mut head := ""
+    mut arg := ""
+    if idx < 0:
+        head = str.Clone(t)
+    else:
+        rawHead := str.SubstrIn(t, 0, idx)
+        head = str.Trim(rawHead)
+        _freeStr(rawHead)
+        rawArg := str.SubstrIn(t, idx + 1, str.ByteLen(t) - idx - 1)
+        arg = str.Trim(rawArg)
+        _freeStr(rawArg)
+    end
+    _freeStr(t)
+    mut name := ""
+    mut error := ""
+    mut ok := false
+    if head == "play":
+        name = "play"
+        ok = true
+    else head == "search":
+        name = "search"
+        if arg == "":
+            error = "search needs text"
+        else:
+            ok = true
+        end
+    else head == "seek":
+        name = "seek"
+        if _digits(arg):
+            ok = true
+        else:
+            error = "seek needs a number of seconds"
+        end
+    else head == "volume":
+        name = "volume"
+        if _digits(arg) and conv.ParseInt(arg) <= 100:
+            ok = true
+        else:
+            error = "volume must be 0 to 100"
+        end
+    else head == "q" or head == "quit":
+        name = "quit"
+        if arg == "":
+            ok = true
+        else:
+            error = _noArgs("quit")
+        end
+    else head == "pause" or head == "next" or head == "prev":
+        if head == "pause":
+            name = "pause"
+        else head == "next":
+            name = "next"
+        else:
+            name = "prev"
+        end
+        if arg == "":
+            ok = true
+        else:
+            error = _noArgs(name)
+        end
+    else:
+        error = "unknown command"
+    end
+    if ok:
+        _freeStr(head)
+        ret Parsed { ok = true, verb = Verb { name = name, arg = arg } }
+    end
+    _freeStr(head)
+    _freeStr(arg)
+    ret Parsed { ok = false, verb = Verb { name = name }, error = error }
+end
+
+@en "Completions"
+/// The completion rows for `text`, in display order: all eight for an empty
+/// prompt, prefix matches for a text without a space, and only the argument
+/// takers once a space has been typed. The rows are borrowed literals; the
+/// caller frees the vector.
+pub func Completions(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    takesArg := str.IndexOf(text, " ") >= 0
+    table := _table()
+    defer table.free()
+    mut i := 0
+    until i < table.len():
+        item := table.get(i)
+        if takesArg:
+            if str.EndsWith(item, " "):
+                out.push(item)
+            end
+        else:
+            if str.StartsWith(item, text):
+                out.push(item)
+            end
+        end
+        i = i + 1
+    end
+    ret out
+end
+
+@en "Complete"
+/// The completion at `index` applied to `text`: the table row itself, so the
+/// next word can be typed straight away. "" when the index is out of range.
+pub func Complete(text: str, index: int): str:
+    items := Completions(text)
+    defer items.free()
+    if index < 0 or index >= items.len():
+        ret ""
+    end
+    ret items.get(index)
+end

@@ -43,6 +43,16 @@ mut _focus := basalam.NoWidget
 
 mut _input := basalam.NewInput()
 
+// The error line the last command left: the message (verbatim, so a controller
+// rejection reads as the controller wrote it) and the verb it names. Both are
+// owned; ClearError frees them.
+mut _error := ""
+
+mut _lastVerb := ""
+
+// The completion row the popup highlights, an index into Completions(text).
+mut _sel := 0
+
 @en "Mode"
 /// What the footer prompt is doing: nothing, live filtering, or the command
 /// line (stage 06 parses it).
@@ -67,7 +77,8 @@ pub struct Prompt:
     @en "handle_event"
     /// At rest, consumes nothing, so every key reaches the keymap exactly as
     /// before. While open, Esc and Enter are the prompt's and every other key
-    /// goes to the editor; a changed text re-applies the filter.
+    /// goes to the editor; a changed text re-applies the filter. In command
+    /// mode Tab applies the highlighted completion and Down/Up move it.
     pub func handle_event(event: basalam.Event): bool:
         if _mode == Mode.Normal or event.kind != basalam.KeyEvent:
             ret false
@@ -85,7 +96,13 @@ pub struct Prompt:
                 LibraryFilter(_input.value())
                 CloseMode()
                 pending.push(Command.SearchAccepted)
+            else:
+                _submit()
             end
+            ret true
+        end
+        if _mode == Mode.Command and (code == term.KeyTab or code == term.KeyDown or code == term.KeyUp):
+            _moveSelection(code)
             ret true
         end
         consumed := _input.handle_event(event)
@@ -94,16 +111,24 @@ pub struct Prompt:
             if text != LibraryQuery():
                 LibraryFilter(text)
             end
+        else consumed and _mode == Mode.Command:
+            _sel = 0
         end
         ret consumed
     end
 
     @en "render"
-    /// Draws the keys slot: the stage-02 hint line at rest, otherwise ` / ` (or
-    /// ` : `) inverse while focused, the editor, and — in search mode — the
-    /// right-aligned `visible of rows` count when the slot has room for it.
+    /// Draws the keys slot: the stage-02 hint line at rest, the error line the
+    /// last command left, otherwise ` / ` (or ` : `) inverse while focused, the
+    /// editor, and — in search mode — the right-aligned `visible of rows` count
+    /// when the slot has room for it. In command mode the completion popup is
+    /// painted above the footer.
     pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
         if _mode == Mode.Normal:
+            if _error != "":
+                _drawError(buf, bounds)
+                ret
+            end
             label := _fitHints(bounds.width - 2)
             if buf.focused:
                 buf.put_str(bounds.x, bounds.y, " " + label + " ", _focus_sgr())
@@ -144,6 +169,146 @@ pub struct Prompt:
                 bounds.x + bounds.width - cw, bounds.y, count, basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier())
             )
         end
+        if _mode == Mode.Command:
+            _drawPopup(buf, bounds)
+        end
+    end
+end
+
+// The first word of `text`, for the error line: the verb the user typed even
+// when the parser did not accept it. Owned by the caller.
+func _head(text: str): str:
+    idx := str.IndexOf(text, " ")
+    if idx < 0:
+        ret str.Clone(text)
+    end
+    ret str.SubstrIn(text, 0, idx)
+end
+
+func _setLastVerb(s: str):
+    _freeStr(_lastVerb)
+    _lastVerb = s
+end
+
+func _setError(text: str):
+    _freeStr(_error)
+    _error = str.Clone(text)
+end
+
+// Applies the highlighted completion (Tab) or moves it (Down and Up, wrapping).
+// The popup is rebuilt from the text, so there is nothing to refresh here.
+func _moveSelection(code: int):
+    items := Completions(_input.value())
+    defer items.free()
+    n := items.len()
+    if n == 0:
+        ret
+    end
+    if _sel >= n:
+        _sel = 0
+    end
+    if code == term.KeyTab:
+        _input.set_value(Complete(_input.value(), _sel))
+        _sel = 0
+        ret
+    end
+    if code == term.KeyDown:
+        _sel = (_sel + 1) % n
+    else:
+        _sel = (_sel - 1 + n) % n
+    end
+end
+
+// Enter on the command line: parse the typed text, close, queue the verb for
+// the drain, and keep the parse error to draw. The typed text is what counts,
+// never the highlighted completion.
+func _submit():
+    text := _input.value()
+    parsed := Parse(text)
+    _setLastVerb(_head(text))
+    CloseMode()
+    if parsed.ok:
+        pendingVerbs.push(parsed.verb)
+    else parsed.error != "":
+        _setError(parsed.error)
+    end
+end
+
+// The error line: the verb and the message, with the fix offered when the slot
+// has room for the long form (28 cells or more).
+func _drawError(buf: basalam.Buffer, bounds: basalam.Rect):
+    tier := basalam.DetectTier()
+    emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+    structure := basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, tier)
+    if bounds.width >= 28:
+        mut x := bounds.x
+        if _lastVerb != "":
+            buf.put_str(x, bounds.y, ":", structure)
+            buf.put_str(x + 1, bounds.y, _lastVerb, structure)
+            x = x + 3 + CellWidth(_lastVerb)
+        end
+        buf.put_str(x, bounds.y, _error, emphasis)
+        x = x + CellWidth(_error)
+        buf.put_str(x, bounds.y, "  · try  ", structure)
+        x = x + 9
+        buf.put_str(x, bounds.y, ":help", emphasis)
+        ret
+    end buf.put_str(bounds.x, bounds.y, _error, emphasis)
+    buf.put_str(bounds.x + CellWidth(_error), bounds.y, " · :help", structure)
+end
+
+// The completion popup: a light ring above the footer with one row per match.
+// It paints outside the prompt's one-row bounds, so it widens the render clip
+// for this call only; the loop repaints fully while command mode is open.
+func _drawPopup(buf: basalam.Buffer, bounds: basalam.Rect):
+    items := Completions(_input.value())
+    defer items.free()
+    n := items.len()
+    if n == 0:
+        ret
+    end
+    mut longest := 0
+    repeat n in i:
+        cw := CellWidth(items.get(i))
+        if cw > longest:
+            longest = cw
+        end
+    end
+    h := n + 2
+    mut x := bounds.x - 1
+    if x < 0:
+        x = 0
+    end
+    mut w := 4 + longest + 2
+    if w > buf.width:
+        w = buf.width
+    end
+    y := bounds.y - 1 - h
+    // The header owns row 0; a popup with no body row left is not drawn.
+    if y < 1 or w < 6:
+        ret
+    end
+    num := str.FromInt(n as i64)
+    title := " " + num + " matches "
+    _freeStr(num)
+    mut view := buf
+    view.clip = buf.area()
+    edge := basalam.Style { fg = basalam.BrightBlack }
+    basalam.DrawBorder(view, basalam.Rect { x = x, y = y, width = w, height = h }, basalam.BorderStyle.Single, edge, "")
+    // The ring's own title would be cut to width - 5, so the full ` N matches `
+    // goes on the top edge at x + 1: it ends one cell before the corner.
+    view.put_str(x + 1, y, title, basalam.StyleSgr(edge, basalam.DetectTier()))
+    _freeStr(title)
+    tier := basalam.DetectTier()
+    emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+    repeat n in i:
+        mut prefix := "  "
+        mut sgr := ""
+        if i == _sel:
+            prefix = "> "
+            sgr = emphasis
+        end
+        view.put_str(x + 1, y + 1 + i, prefix + items.get(i), sgr)
     end
 end
 
@@ -156,6 +321,23 @@ pub func ModeName(m: Mode): str:
         ret "command"
     end
     ret "normal"
+end
+
+@en "SetError"
+/// Puts the error line in the keys slot of normal mode, replacing the hints
+/// until the next prompt opens or a playlist key is pressed. The text is shown
+/// verbatim, so a controller rejection reads as the controller wrote it.
+pub func SetError(text: str):
+    _setError(text)
+end
+
+@en "ClearError"
+/// Drops the error line and the verb it named.
+pub func ClearError():
+    _freeStr(_error)
+    _error = ""
+    _freeStr(_lastVerb)
+    _lastVerb = ""
 end
 
 @en "CurrentMode"
@@ -180,8 +362,10 @@ end
 
 @en "OpenSearch"
 /// Enters search mode with the current query in the editor and asks the loop to
-/// focus the keys stop. The pre-`/` query is kept for Esc.
+/// focus the keys stop. The pre-`/` query is kept for Esc. Any error line is
+/// dismissed.
 pub func OpenSearch():
+    ClearError()
     _freeStr(_saved)
     _saved = str.Clone(LibraryQuery())
     _mode = Mode.Search
@@ -191,10 +375,12 @@ end
 
 @en "OpenCommandLine"
 /// Enters command mode with an empty editor and asks the loop to focus the keys
-/// stop.
+/// stop. Any error line is dismissed.
 pub func OpenCommandLine():
+    ClearError()
     _mode = Mode.Command
     _input.set_value("")
+    _sel = 0
     _focus = KeysId
 end
 

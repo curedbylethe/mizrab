@@ -28,7 +28,8 @@ import "github.com/curedbylethe/basalam/basalam"
 /// are performed inside basalam's preset and are never reported to the sink;
 /// they are named here so the command layer has one vocabulary. SearchAccepted
 /// is reported by the prompt, not by a key: the filter changed and the queue
-/// must be reseeded from the visible rows.
+/// must be reseeded from the visible rows. Quit stops the app; stage 07 binds
+/// the key that reports it.
 pub enum Command:
     FocusLeft
     FocusDown
@@ -41,6 +42,7 @@ pub enum Command:
     OpenSearch
     OpenCommandLine
     SearchAccepted
+    Quit
 end
 
 @en "Vim"
