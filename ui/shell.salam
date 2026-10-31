@@ -42,10 +42,6 @@ const _WORDMARK := "[ M I Z R A B ]"
 
 const _CONTEXT := "‹context›"
 
-const _STATUS_HEAD := "▶︎"
-
-const _STATUS := "playing"
-
 const _MODE := "normal"
 
 // Hint labels, full then short, then the short set with whole hints dropped in
@@ -126,7 +122,6 @@ pub const DegradeId := 11
 enum Slot:
     Wordmark
     Context
-    Status
     Hints
     Mode
 end
@@ -156,11 +151,6 @@ struct Segment:
             label = _WORDMARK
         else this.slot == Slot.Context:
             label = TruncatePath(_CONTEXT, bounds.width - 2 * this.inset)
-        else this.slot == Slot.Status:
-            // The 3-cell status slot holds the glyph alone; 11 holds the word.
-            if bounds.width >= 11:
-                label = _STATUS
-            end
         else this.slot == Slot.Hints:
             label = _fitHints(bounds.width - 2 * this.inset)
         else:
@@ -184,39 +174,6 @@ struct Segment:
             cx = cx + term.Width(this.head) + 1
         end
         buf.put_str(cx, bounds.y, label, basalam.StyleSgr(this.style, tier))
-    end
-end
-
-// The panel: a light single-line frame, heavy and yellow while focused. The
-// title rides the top edge from x + 2 as one run.
-struct Frame:
-    pub use basalam.BaseWidget
-
-    title: str = ""
-    focus: bool = true
-
-    pub func focusable(): bool:
-        ret this.focus
-    end
-
-    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
-        tier := basalam.DetectTier()
-        mut edge := basalam.Style { fg = basalam.BrightBlack }
-        if buf.focused:
-            edge = basalam.Style { fg = basalam.Yellow }
-            _draw_heavy(buf, bounds, edge)
-        else:
-            basalam.DrawBorder(buf, bounds, basalam.BorderStyle.Single, edge, "")
-        end
-        if bounds.width < 6:
-            ret
-        end
-        run := " " + this.title + " "
-        mut sgr := basalam.StyleSgr(edge, tier)
-        if buf.focused:
-            sgr = sgr + term.Sgr(term.StyleReverse)
-        end
-        buf.put_str(bounds.x + 2, bounds.y, run, sgr)
     end
 end
 
@@ -281,7 +238,9 @@ pub struct Shell:
         )
         body := height - 2
         mut now := 5
-        if body >= 14:
+        if body >= 22:
+            now = 8
+        else body >= 14:
             now = 6
         end
         this.screen.widget(PlaylistId).set_bounds(
@@ -426,11 +385,8 @@ pub func NewShell(width: int, height: int): Shell:
     wordmark := Segment { slot = Slot.Wordmark, style = basalam.Style { fg = basalam.BrightWhite, bold = true } } as dyn basalam.Widget
     context := Segment { slot = Slot.Context, align = basalam.Alignment.Right } as dyn basalam.Widget
     playlist := Playlist { title = "playlist" } as dyn basalam.Widget
-    nowplaying := Frame { title = "now playing", focus = false } as dyn basalam.Widget
-    status := Segment {
-        slot = Slot.Status, head = _STATUS_HEAD, head_style = basalam.Style { fg = basalam.Green },
-        inset = 1, focus = true,
-    } as dyn basalam.Widget
+    nowplaying := NowPlaying {} as dyn basalam.Widget
+    status := Status {} as dyn basalam.Widget
     keys := Segment { slot = Slot.Hints, style = basalam.Style { fg = basalam.BrightBlack }, inset = 1, focus = true } as dyn basalam.Widget
     mode := Segment { slot = Slot.Mode, align = basalam.Alignment.Right, inset = 1, focus = true } as dyn basalam.Widget
     degrade := Degrade {} as dyn basalam.Widget

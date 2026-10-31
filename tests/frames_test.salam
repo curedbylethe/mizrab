@@ -63,7 +63,7 @@ func test_frame_at_80x24():
         "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
     )
     assert_row(
-        shell.screen.buffer, 17,
+        shell.screen.buffer, 15,
         "┌─ now playing ────────────────────────────────────────────────────────────────┐",
     )
     assert_row(
@@ -72,7 +72,7 @@ func test_frame_at_80x24():
     )
 end
 
-// 100 × 30: the short labels still hold, with the 6-row now-playing panel.
+// 100 × 30: the short labels still hold, with the 8-row now-playing panel.
 func test_frame_at_100x30():
     mut shell := ui.NewShell(100, 30)
     defer shell.Close()
@@ -86,7 +86,7 @@ func test_frame_at_100x30():
         "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
     )
     assert_row(
-        shell.screen.buffer, 23,
+        shell.screen.buffer, 21,
         "┌─ now playing ────────────────────────────────────────────────────────────────────────────────────┐",
     )
     assert_row(
@@ -109,7 +109,7 @@ func test_frame_at_200x60():
         "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
     )
     assert_row(
-        shell.screen.buffer, 53,
+        shell.screen.buffer, 51,
         "┌─ now playing ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
     )
     assert_row(

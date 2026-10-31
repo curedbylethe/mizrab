@@ -1,0 +1,237 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The now-playing panel: the playing track's title, artist and album, the
+// elapsed and total clock, and a progress bar, inside a light frame. The panel
+// is never a focus stop.
+//
+// The track comes from the playing path through LibraryRowByPath, so a row the
+// filter hides still names the track. No track means no content: the panel
+// draws its frame alone, which is what an unloaded shell shows.
+//
+// The playback word, glyph, position and duration are package level and pushed
+// from main.salam: Screen.add boxes a copy of the widget, so a field written
+// after add could go stale, and the ui package must not name the player. The
+// strings are borrowed from the caller, which passes literals.
+//
+// Geometry (STAGE-04): inner height - 2 rows, inner width - 4 cells at x + 2;
+// block width min(inner, 72) centred. The drop ladder keeps the title and the
+// clock and gives up the spacer, album, artist and bar in that order. The
+// integer bar math keeps the widget off floating point.
+
+package ui
+
+import str
+import "github.com/curedbylethe/basalam/basalam"
+
+const _NOW_RUN := " now playing "
+
+// Cell budget for the line block: wider panels centre a 72-cell block.
+const _NOW_MAX := 72
+
+const _BAR_FULL := "█"
+
+// The partial cell, 1/8 to 7/8 filled.
+const _BAR_PARTS := "▏▎▍▌▋▊▉"
+
+const _BAR_REST := "─"
+
+mut _pbWord := "playing"
+
+mut _pbGlyph := "▶︎"
+
+mut _pbPos := 0 as i64
+
+mut _pbDur := 0 as i64
+
+@en "NowPlaying"
+/// The now-playing panel: a light frame whose content is read from the
+/// package playback state and the library view at render time.
+pub struct NowPlaying:
+    pub use basalam.BaseWidget
+
+    pub func focusable(): bool:
+        ret false
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        tier := basalam.DetectTier()
+        edge := basalam.Style { fg = basalam.BrightBlack }
+        basalam.DrawBorder(buf, bounds, basalam.BorderStyle.Single, edge, "")
+        if bounds.width >= 6:
+            buf.put_str(bounds.x + 2, bounds.y, _NOW_RUN, basalam.StyleSgr(edge, tier))
+        end
+        if bounds.width <= 4 or bounds.height <= 2:
+            ret
+        end
+        row := LibraryRowByPath(_playing)
+        if row.path == "":
+            ret
+        end
+
+        innerW := bounds.width - 4
+        innerH := bounds.height - 2
+        mut bw := innerW
+        if bw > _NOW_MAX:
+            bw = _NOW_MAX
+        end
+        bx := bounds.x + 2 + (innerW - bw) / 2
+
+        total := _pbDur
+        showSpacer := innerH >= 6
+        showAlbum := innerH >= 5
+        showArtist := innerH >= 4
+        showBar := total > 0 and innerH >= 3
+        mut n := 2
+        if showArtist:
+            n = n + 1
+        end
+        if showAlbum:
+            n = n + 1
+        end
+        if showSpacer:
+            n = n + 1
+        end
+        if showBar:
+            n = n + 1
+        end
+        mut off := (innerH - n) / 2
+        if off < 0:
+            off = 0
+        end
+
+        emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+        structure := basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, tier)
+        mut y := bounds.y + 1 + off
+        _putFit(buf, bx, y, row.title, bw, emphasis)
+        y = y + 1
+        if showArtist:
+            _putFit(buf, bx, y, row.artist, bw, "")
+            y = y + 1
+        end
+        if showAlbum:
+            _putFit(buf, bx, y, row.album, bw, structure)
+            y = y + 1
+        end
+        if showSpacer:
+            y = y + 1
+        end
+        clock := _clock(_pbPos, total)
+        _putFit(buf, bx, y, clock, bw, "")
+        _freeStr(clock)
+        y = y + 1
+        if showBar:
+            _drawBar(buf, bx, y, bw, _pbPos, total)
+        end
+    end
+end
+
+// Writes `s` in at most `max` cells, cutting with Truncate and freeing only the
+// copy the cut made.
+func _putFit(buf: basalam.Buffer, x: int, y: int, s: str, max: int, sgr: str):
+    if CellWidth(s) <= max:
+        buf.put_str(x, y, s, sgr)
+        ret
+    end
+    cut := Truncate(s, max)
+    buf.put_str(x, y, cut, sgr)
+    _freeStr(cut)
+end
+
+// `mm:ss / mm:ss`, or `--:-- / --:--` when the total is not known. Owned.
+func _clock(pos: i64, total: i64): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    if total <= 0:
+        str.BufAppend(b, "--:-- / --:--")
+        ret str.BufStr(b)
+    end
+    p := DurationClock(pos)
+    str.BufAppend(b, p)
+    if pos > 0:
+        _freeStr(p)
+    end
+    str.BufAppend(b, " / ")
+    t := DurationClock(total)
+    str.BufAppend(b, t)
+    _freeStr(t)
+    ret str.BufStr(b)
+end
+
+// The bar: `bw` cells, filled default and the remainder structure. The
+// fractional cell is an eighth at most, chosen by the remaining frames over
+// total, so the whole bar stays in integer math.
+func _drawBar(buf: basalam.Buffer, x: int, y: int, bw: int, pos: i64, total: i64):
+    mut full := 0
+    mut part := 0
+    if pos >= total:
+        full = bw
+    else pos > 0:
+        scaled := pos * (bw as i64)
+        full = (scaled / total) as int
+        part = ((scaled % total) * 8 / total) as int
+    end
+    mut cx := x
+    if full > 0:
+        run := str.Repeat(_BAR_FULL, full)
+        buf.put_str(cx, y, run, "")
+        _freeStr(run)
+        cx = cx + full
+    end
+    if part > 0:
+        buf.put_str(cx, y, str.CharAtIndex(_BAR_PARTS, part - 1), "")
+        cx = cx + 1
+    end
+    rest := bw - (cx - x)
+    if rest > 0:
+        run := str.Repeat(_BAR_REST, rest)
+        buf.put_str(cx, y, run, basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier()))
+        _freeStr(run)
+    end
+end
+
+@en "SetPlayback"
+/// Records the state main.salam computed from the player: the word and glyph
+/// the footer shows, and the position and duration the panel shows.
+pub func SetPlayback(word: str, glyph: str, positionMs: i64, durationMs: i64):
+    _pbWord = word
+    _pbGlyph = glyph
+    _pbPos = positionMs
+    _pbDur = durationMs
+end
+
+@en "PlaybackWord"
+/// The pushed playback word: `playing`, `paused` or `stopped`.
+pub func PlaybackWord(): str:
+    ret _pbWord
+end
+
+@en "PlaybackGlyph"
+/// The pushed playback glyph: `▶︎`, `‖` or `■`.
+pub func PlaybackGlyph(): str:
+    ret _pbGlyph
+end
+
+@en "PlaybackPositionMs"
+/// The pushed playback position in milliseconds.
+pub func PlaybackPositionMs(): i64:
+    ret _pbPos
+end
+
+@en "PlaybackDurationMs"
+/// The pushed track duration in milliseconds, 0 or less when it is unknown.
+pub func PlaybackDurationMs(): i64:
+    ret _pbDur
+end

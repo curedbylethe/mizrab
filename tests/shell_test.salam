@@ -41,8 +41,8 @@ func test_construction():
     assert_rect(shell.screen.root.bounds(), 0, 0, 80, 24)
     testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
     assert_rect(shell.screen.widget(ui.BodyId).bounds(), 0, 1, 80, 22)
-    assert_rect(shell.screen.widget(ui.PlaylistId).bounds(), 0, 1, 80, 16)
-    assert_rect(shell.screen.widget(ui.NowPlayingId).bounds(), 0, 17, 80, 6)
+    assert_rect(shell.screen.widget(ui.PlaylistId).bounds(), 0, 1, 80, 14)
+    assert_rect(shell.screen.widget(ui.NowPlayingId).bounds(), 0, 15, 80, 8)
 end
 
 // The refit at 40 × 12. Header h 1, body h 10, footer h 1; the body split is

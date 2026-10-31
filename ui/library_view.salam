@@ -299,6 +299,23 @@ pub func LibrarySelectedRow(): Row:
     ret LibraryRowAt(_cursor)
 end
 
+@en "LibraryRowByPath"
+/// The loaded row whose path is exactly `path`, or a zero Row when no row has
+/// it. The filter is ignored, so a hidden row is still found.
+pub func LibraryRowByPath(path: str): Row:
+    if path.len() == 0:
+        ret Row {}
+    end
+    mut i := 0
+    until i < _rows.len():
+        if _rows.get(i).path == path:
+            ret _rows.get(i)
+        end
+        i = i + 1
+    end
+    ret Row {}
+end
+
 @en "SetPlaying"
 /// Records the path the player reports, so the list can mark that row. The
 /// comparison is by exact path; the view keeps its own copy.
