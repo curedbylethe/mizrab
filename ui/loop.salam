@@ -25,7 +25,6 @@
 
 package ui
 
-import term
 import "github.com/curedbylethe/basalam/basalam"
 
 @en "TickMs"
@@ -49,14 +48,17 @@ mut _verbSink := (verb: Verb):
     _ := verb
 end
 
-// The map the loop installs: Vim plus `q`, which is the application's alone.
-// Esc stays unbound here: the preset uses it for pop_focus and CUR-508 owns it.
+// Which map is installed: false = the normal one, true = the modal one. One
+// loop runs at a time and set_keymap owns the map, so a flag is enough to keep
+// the swap idempotent.
+mut _modalMap := false
+
+// The map the loop installs: Vim plus nothing. `q` lives in Vim now, because
+// its action needs the screen and the pushed playback word (stage 07), and this
+// file only keeps the sink the verbs go into. Esc stays unbound here: the
+// preset uses it to close a modal.
 func _keymap(): basalam.Keymap:
-    mut km := Vim((command: Command): pending.push(command) end)
-    km.bind(
-        term.Decode("q"), (screen: basalam.Screen*, event: basalam.Event): screen[0].stop() ret true end
-    )
-    ret km
+    ret Vim((command: Command): pending.push(command) end)
 end
 
 // Applies the verbs in the order the keys arrived, then empties the list. The
@@ -87,6 +89,26 @@ func _drain(onCommand: func (Command)):
     pendingVerbs.clear()
 end
 
+@en "SyncKeymap"
+/// Installs the map the overlay state calls for: ModalKeymap while a panel is
+/// up, a fresh normal map once none is. Run calls this once per frame, after
+/// ApplyOverlay and the close drain, so a key that opens or closes a panel
+/// swaps at the frame boundary, never mid-key. set_keymap frees the map it
+/// replaces, which is why the normal map is rebuilt rather than kept. Idempotent:
+/// when the state already matches, no map is touched.
+pub func SyncKeymap(screen &: basalam.Screen):
+    want := OverlayOpen()
+    if want == _modalMap:
+        ret
+    end
+    _modalMap = want
+    if want:
+        screen.set_keymap(ModalKeymap())
+    else:
+        screen.set_keymap(_keymap())
+    end
+end
+
 @en "SetVerbSink"
 /// Installs the function `_drain` calls for each parsed command-line verb, on
 /// the loop thread, after every command the keymap reported. `ui.Run` does not
@@ -110,6 +132,7 @@ end
 pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func ()):
     sh.screen.tick_ms = TickMs
     sh.screen.set_keymap(_keymap())
+    _modalMap = false
     Begin(flagPath)
     defer End(flagPath)
     Open(sh)
@@ -128,6 +151,15 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
         if consumed and CurrentMode() == Mode.Normal:
             ClearError()
         end
+        // Esc inside a modal closes it inside dispatch; the loop mirrors the
+        // app half of the protocol: unraise the subtree, then drop the focus
+        // push. unraise already marks the next frame full, which is the clean
+        // frame the dim needs on the way out.
+        closed := TakeClosedOverlay()
+        if closed != basalam.NoWidget:
+            sh.screen.unraise_subtree(closed)
+            _ := sh.screen.pop_focus()
+        end
         // The completion popup paints outside the prompt's one-row bounds, so
         // command mode needs a whole frame to clear it again.
         if ev.kind == basalam.KeyEvent and (wasCommand or CurrentMode() == Mode.Command):
@@ -143,11 +175,25 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
             // After dispatch, not before: dispatch resizes the screen and lays
             // the root out again, which would overwrite the cover's bounds.
             sh.Resize(ev.width, ev.height)
+            OverlayResize(sh.screen)
         end
         _drain(onCommand)
         // The prompt asked for a focus move while it handled the key; a widget
         // cannot reach the screen, so it happens here, before the paint.
         ApplyFocus(sh.screen)
+        // The command sink only ever holds a copy of the shell, so `:help` and
+        // `:q` queue their request and the loop applies it on this screen.
+        ApplyOverlay(sh.screen)
+        // Both ways an overlay can open or close have now run: the close drain
+        // above and the request ApplyOverlay just applied. Swapping only here
+        // means one swap per frame at most, and none when nothing changed.
+        SyncKeymap(sh.screen)
+        // An open overlay paints a dim and a ring outside its own dispatch
+        // region, so its frame is full every time; closing it already marked a
+        // full repaint above.
+        if OverlayOpen():
+            sh.screen.dirty = true
+        end
         // basalam's own rule, restated because this loop owns the iteration.
         if not consumed and ev.is_ctrl("c"):
             sh.screen.stop()

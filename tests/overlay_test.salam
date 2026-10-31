@@ -1,0 +1,417 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the two overlays headless: the help panel at 100 x 30 and at the
+// 40 x 12 floor, the dim outside the dialog, Esc through dispatch and the
+// loop's close drain, the re-centring on resize, the quit confirmation opened
+// by `q` while a track plays, `q` confirming it, Esc keeping the playback, and
+// the guard at 39 x 12. start() is never called, so the golden stays byte-exact.
+
+import str
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+// The player verbs the test's own normal map reports. A package global because
+// a lambda captures by value, so a captured local Vector would stay empty.
+mut hits := Vector {} as Vector<ui.Command>
+
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+func track(path: str, title: str, artist: str, album: str): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, tagged = true, format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+// The track the quit modal must name.
+func four(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue"))
+    v.push(track("/m/b.flac", "Nina", "Nina Hagen", "Nacht"))
+    v.push(track("/m/c.flac", "So What", "Miles Davis", "Quiet"))
+    v.push(track("/m/d.flac", "Freddie Freeloader", "Miles Davis", "Quiet"))
+    ret indexOf(v)
+end
+
+func slice(y: int, x: int, n: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, n)
+end
+
+// The loop's half of the close protocol: take the id Esc recorded, unraise its
+// subtree, then drop the focus push. A headless test mirrors Run here.
+func drainClose(screen &: basalam.Screen):
+    id := ui.TakeClosedOverlay()
+    if id != basalam.NoWidget:
+        screen.unraise_subtree(id)
+        _ := screen.pop_focus()
+    end
+end
+
+// 100 x 30: a 59 x 14 dialog at (20, 8), the six rows centred in the inner
+// block, `esc close` on the last inner row, the ring drawn single, and every
+// body cell outside the dialog dimmed.
+func test_help_at_100x30():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+    testing.AssertTrue(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.HelpModalId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    buf := shell.screen.buffer
+    testing.AssertEqStr(slice(8, 20, 1, buf), "┌")
+    testing.AssertEqStr(slice(8, 79, 1, buf), "┐")
+    testing.AssertEqStr(slice(21, 20, 1, buf), "└")
+    testing.AssertEqStr(slice(21, 79, 1, buf), "┘")
+    testing.AssertEqStr(slice(8, 22, 6, buf), " help ")
+
+    testing.AssertEqStr(slice(11, 35, 10, buf), "hjkl / tab")
+    testing.AssertEqStr(slice(11, 47, 10, buf), "move focus")
+    testing.AssertEqStr(slice(12, 40, 5, buf), "space")
+    testing.AssertEqStr(slice(12, 47, 12, buf), "play / pause")
+    testing.AssertEqStr(slice(13, 40, 5, buf), "n / p")
+    testing.AssertEqStr(slice(13, 47, 15, buf), "next / previous")
+    testing.AssertEqStr(slice(14, 44, 1, buf), "/")
+    testing.AssertEqStr(slice(14, 47, 6, buf), "search")
+    testing.AssertEqStr(slice(15, 44, 1, buf), ":")
+    testing.AssertEqStr(slice(15, 47, 7, buf), "command")
+    testing.AssertEqStr(slice(16, 44, 1, buf), "q")
+    testing.AssertEqStr(slice(16, 47, 17, buf), "quit (asks first)")
+    testing.AssertEqStr(slice(20, 67, 9, buf), "esc close")
+
+    testing.AssertTrue(str.Contains(buf.get(35, 11).style, term.Sgr(term.StyleBold)))
+    testing.AssertEqStr(buf.get(47, 11).style, "")
+
+    // The body outside the dialog is dimmed; the header, outside the Modal's
+    // own bounds, keeps its style.
+    testing.AssertTrue(str.Contains(buf.get(0, 1).style, "\x1b[2"))
+    testing.AssertTrue(str.Contains(buf.get(99, 28).style, "\x1b[2"))
+    testing.AssertFalse(str.Contains(buf.get(2, 0).style, "\x1b[2"))
+end
+
+// Esc through dispatch closes the modal, the drain gives the focus back, and
+// the next frame paints the body undimmed again.
+func test_escape_closes_help():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertTrue(str.Contains(shell.screen.buffer.get(0, 1).style, "\x1b[2"))
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    drainClose(shell.screen)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertFalse(str.Contains(shell.screen.buffer.get(0, 1).style, "\x1b[2"))
+    testing.AssertEqStr(slice(0, 2, 1, shell.screen.buffer), "[")
+end
+
+// At the floor the body is 40 x 10, so the dialog is the full 40 x 8 and the
+// widest row still fits: nothing clips, and the esc row is the one row the
+// six keys need.
+func test_help_at_40x12():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    buf := shell.screen.buffer
+    testing.AssertEqStr(slice(2, 0, 1, buf), "┌")
+    testing.AssertEqStr(slice(2, 39, 1, buf), "┐")
+    testing.AssertEqStr(slice(9, 0, 1, buf), "└")
+    testing.AssertEqStr(slice(9, 39, 1, buf), "┘")
+    testing.AssertEqStr(slice(2, 2, 6, buf), " help ")
+
+    testing.AssertEqStr(slice(3, 5, 10, buf), "hjkl / tab")
+    testing.AssertEqStr(slice(8, 14, 1, buf), "q")
+    testing.AssertEqStr(slice(8, 17, 17, buf), "quit (asks first)")
+    testing.AssertEqStr(slice(8, 34, 1, buf), " ")
+    testing.AssertFalse(str.Contains(buf.row_text(8), "esc close"))
+end
+
+// A resize while the modal is open re-bounds it: 80 x 24 centres a 48 x 11
+// dialog at (16, 6), and back at 100 x 30 it is the 59 x 14 at (20, 8) again.
+func test_resize_recentres():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+
+    shell.Resize(80, 24)
+    ui.OverlayResize(shell.screen)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    buf := shell.screen.buffer
+    testing.AssertEqStr(slice(6, 16, 1, buf), "┌")
+    testing.AssertEqStr(slice(6, 63, 1, buf), "┐")
+    testing.AssertEqStr(slice(16, 16, 1, buf), "└")
+    testing.AssertEqStr(slice(16, 63, 1, buf), "┘")
+    testing.AssertEqStr(slice(6, 18, 6, buf), " help ")
+
+    shell.Resize(100, 30)
+    ui.OverlayResize(shell.screen)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(8, 20, 1, shell.screen.buffer), "┌")
+    testing.AssertEqStr(slice(21, 79, 1, shell.screen.buffer), "┘")
+end
+
+// `q` with a track playing opens the confirmation instead of stopping: a 59 x 8
+// dialog at (20, 11) naming the title and the artist, and `q` inside it stops
+// the screen (a closed event channel refuses the next post).
+func test_quit_while_playing():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 0, 0)
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): end))
+
+    testing.AssertTrue(shell.screen.dispatch(key("q")))
+    ui.ApplyOverlay(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertTrue(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.QuitModalId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    buf := shell.screen.buffer
+    testing.AssertEqStr(slice(11, 22, 7, buf), " quit? ")
+    testing.AssertEqStr(slice(12, 34, 32, buf), "Quit mizrab? Playback will stop.")
+    testing.AssertEqStr(slice(14, 42, 1, buf), "▶")
+    testing.AssertEqStr(slice(14, 45, 13, buf), "Blue in Green")
+    testing.AssertEqStr(slice(15, 45, 11, buf), "Miles Davis")
+    testing.AssertEqStr(slice(17, 37, 6, buf), "q quit")
+    testing.AssertEqStr(slice(17, 45, 18, buf), "esc keep listening")
+
+    testing.AssertTrue(shell.screen.dispatch(key("q")))
+    testing.AssertFalse(shell.screen.post(key("z")))
+    // Leave the process on the normal map: the swap flag is package state.
+    _ := ui.CloseOverlay(shell.screen)
+    ui.SyncKeymap(shell.screen)
+end
+
+// Esc inside the confirmation keeps the playback and the list: the modal hides,
+// the focus returns to the playlist and neither the word nor the path moves.
+func test_escape_keeps_playing():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 0, 0)
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): end))
+    testing.AssertTrue(shell.screen.dispatch(key("q")))
+    ui.ApplyOverlay(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertTrue(ui.OverlayOpen())
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    drainClose(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    testing.AssertEqStr(ui.PlaybackWord(), "playing")
+    testing.AssertEqStr(ui.PlayingPath(), "/m/a.flac")
+end
+
+// While the help panel is up only the modal map is installed: n, p, space, h
+// and : are unbound, so none reaches the player sink or moves the list. Esc
+// closes the panel and the loop swaps the normal map back: n is consumed and
+// j moves the playlist cursor again.
+func test_modal_map_isolates_help():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    hits.clear()
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): hits.push(command) end))
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+    ui.SyncKeymap(shell.screen)
+    cursor := ui.LibraryCursor()
+
+    testing.AssertFalse(shell.screen.dispatch(key("n")))
+    testing.AssertFalse(shell.screen.dispatch(key("p")))
+    testing.AssertFalse(shell.screen.dispatch(key(" ")))
+    testing.AssertFalse(shell.screen.dispatch(key("h")))
+    testing.AssertFalse(shell.screen.dispatch(key(":")))
+    testing.AssertEqInt(hits.len(), 0)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.HelpModalId)
+    testing.AssertEqInt(ui.LibraryCursor(), cursor)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    drainClose(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertTrue(shell.screen.dispatch(key("n")))
+    testing.AssertTrue(shell.screen.dispatch(key("j")))
+    testing.AssertEqInt(ui.LibraryCursor(), cursor + 1)
+end
+
+// Same isolation in the quit confirmation, and Esc restores the map without
+// touching the playback it was guarding.
+func test_modal_map_isolates_quit():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 0, 0)
+    hits.clear()
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): hits.push(command) end))
+    testing.AssertTrue(ui.OpenQuit(shell.screen))
+    ui.SyncKeymap(shell.screen)
+    cursor := ui.LibraryCursor()
+
+    testing.AssertFalse(shell.screen.dispatch(key("n")))
+    testing.AssertFalse(shell.screen.dispatch(key("p")))
+    testing.AssertFalse(shell.screen.dispatch(key(" ")))
+    testing.AssertFalse(shell.screen.dispatch(key("h")))
+    testing.AssertFalse(shell.screen.dispatch(key(":")))
+    testing.AssertEqInt(hits.len(), 0)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.QuitModalId)
+    testing.AssertEqInt(ui.LibraryCursor(), cursor)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    drainClose(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertEqStr(ui.PlaybackWord(), "playing")
+    testing.AssertTrue(shell.screen.dispatch(key("n")))
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+end
+
+// q is the one key the modal map owns: in help it closes the panel and takes
+// the quit path, which with nothing playing stops the screen.
+func test_modal_q_closes_help():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    ui.SetPlaying("")
+    ui.SetPlayback("", "", 0, 0)
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): hits.push(command) end))
+    testing.AssertTrue(ui.OpenHelp(shell.screen))
+    ui.SyncKeymap(shell.screen)
+
+    testing.AssertTrue(shell.screen.dispatch(key("q")))
+    testing.AssertFalse(ui.OverlayOpen())
+    ui.ApplyOverlay(shell.screen)
+    ui.SyncKeymap(shell.screen)
+    testing.AssertFalse(shell.screen.post(key("z")))
+end
+
+// At rest both modals are registered but hidden: the registry grew by four, the
+// focus order did not, and neither overlay is reachable.
+func test_registry_at_rest():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    testing.AssertEqInt(shell.screen.tree.count(), 16)
+    testing.AssertEqInt(shell.screen.tree.parent(ui.HelpPanelId), ui.HelpModalId)
+    testing.AssertEqInt(shell.screen.tree.parent(ui.QuitPanelId), ui.QuitModalId)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertFalse(shell.screen.can_focus(ui.HelpModalId))
+    testing.AssertFalse(shell.screen.can_focus(ui.QuitModalId))
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+end
+
+// `:help` goes through the command sink, which only holds a copy of the shell:
+// the verb queues the request and the loop opens the panel on its own screen.
+// The submit's queued playlist focus must not steal the focus back afterwards.
+func test_help_request_from_the_sink():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.KeysId)
+
+    // The drain's half: the verb runs in a lambda that captured the shell by
+    // value, then the loop applies the request it queued.
+    sink := (): ui.RequestHelp() end
+    sink()
+    ui.CloseMode()
+    ui.ApplyFocus(shell.screen)
+    ui.ApplyOverlay(shell.screen)
+    testing.AssertTrue(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.HelpModalId)
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    drainClose(shell.screen)
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+end
+
+// Below the floor both overlays refuse: nothing opens and nothing is raised.
+func test_guard_refuses():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(39, 12)
+    defer shell.Close()
+    testing.AssertFalse(ui.OpenHelp(shell.screen))
+    testing.AssertFalse(ui.OpenQuit(shell.screen))
+    testing.AssertFalse(ui.OverlayOpen())
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    testing.AssertEqInt(ui.TakeClosedOverlay(), basalam.NoWidget)
+end
+
+func main(): int:
+    test_help_at_100x30()
+    test_escape_closes_help()
+    test_help_at_40x12()
+    test_resize_recentres()
+    test_quit_while_playing()
+    test_escape_keeps_playing()
+    test_modal_map_isolates_help()
+    test_modal_map_isolates_quit()
+    test_modal_q_closes_help()
+    test_help_request_from_the_sink()
+    test_registry_at_rest()
+    test_guard_refuses()
+    ret testing.Summary()
+end

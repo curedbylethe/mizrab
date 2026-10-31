@@ -16,9 +16,13 @@
 // The keymap: basalam's vim preset plus the keys the library leaves to the
 // application. Focus movement (h/j/k/l, Tab, the arrows, gg, G) and "/" belong
 // to the preset; space, n, p and : are bound globally here and report the verbs
-// below through the caller's sink. j/k and Enter are bound to the playlist stop:
-// they move the selection and play it, and they shadow the preset's focus move
-// only while that panel holds the focus. The map knows no player and no screen.
+// below through the caller's sink. j/k and Enter are bound to the playlist
+// stop: they move the selection and play it, and they shadow the preset's focus
+// move only while that panel holds the focus. q is bound here too but is not a
+// sink verb: it asks for confirmation while a track plays, which needs the
+// screen and the pushed playback word, so it calls the quit path in
+// overlay.salam. The modal map below replaces this one while a panel is up, so
+// only q (and the Modal's own Esc) is live then. The map knows no player.
 
 import term
 import "github.com/curedbylethe/basalam/basalam"
@@ -46,7 +50,7 @@ pub enum Command:
 end
 
 @en "Vim"
-/// Builds the vim-ish keymap: basalam's vim preset, with space, n, p and :
+/// Builds the vim-ish keymap: basalam's vim preset, with space, n, p, : and q
 /// added globally and j, k and Enter scoped to the playlist. "/" and the four
 /// focus moves come from the preset. `sink` receives every verb the map acts
 /// on; the install keeps ownership of the returned map (`set_keymap` frees it),
@@ -56,19 +60,20 @@ pub func Vim(sink: func (Command)): basalam.Keymap:
         sink(Command.OpenSearch)
         ret true
     end
+    // q is the one key that is not a verb: it queues the quit path, which
+    // decides between the stop and the confirmation from the pushed playback
+    // word and then runs on the loop's own screen.
+    quit := (screen: basalam.Screen*, event: basalam.Event):
+        _ := screen
+        RequestQuit()
+        ret true
+    end
     mut km := basalam.NewVimKeymap(search)
-    km.bind(
-        term.Decode(" "), (screen: basalam.Screen*, event: basalam.Event): sink(Command.PlayPause) ret true end
-    )
-    km.bind(
-        term.Decode("n"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Next) ret true end
-    )
-    km.bind(
-        term.Decode("p"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Prev) ret true end
-    )
-    km.bind(
-        term.Decode(":"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.OpenCommandLine) ret true end
-    )
+    km.bind(term.Decode(" "), (screen: basalam.Screen*, event: basalam.Event): sink(Command.PlayPause) ret true end)
+    km.bind(term.Decode("n"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Next) ret true end)
+    km.bind(term.Decode("p"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.Prev) ret true end)
+    km.bind(term.Decode(":"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.OpenCommandLine) ret true end)
+    km.bind(term.Decode("q"), quit)
     km.bind_for(
         PlaylistId, term.Decode("j"), (screen: basalam.Screen*, event: basalam.Event): LibraryMove(1) ret true end
     )
@@ -77,6 +82,20 @@ pub func Vim(sink: func (Command)): basalam.Keymap:
     )
     km.bind_for(
         PlaylistId, term.Decode("\r"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.PlaySelected) ret true end
+    )
+    ret km
+end
+
+@en "ModalKeymap"
+/// The map installed while an overlay is up: exactly q, which reads the open
+/// panel (see ModalQuit). Everything else is unbound, so n, p, space, h, j, k
+/// and : cannot change the world behind the dim. Esc needs no row here: the
+/// Modal handles it itself. Same ownership rule as Vim: set_keymap frees it,
+/// so build a fresh map for every install.
+pub func ModalKeymap(): basalam.Keymap:
+    mut km := basalam.NewKeymap()
+    km.bind(
+        term.Decode("q"), (screen: basalam.Screen*, event: basalam.Event): ModalQuit(screen[0]) ret true end
     )
     ret km
 end

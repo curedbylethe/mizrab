@@ -155,9 +155,9 @@ func runShell(): int:
     // The parsed commands are executed on the loop thread, where the player's
     // unsynchronised state already lives. Installed before Run so the first
     // `:play` can never arrive without a sink.
-    ui.SetVerbSink((verb: ui.Verb): runVerb(verb, shell) end)
+    ui.SetVerbSink((verb: ui.Verb): runVerb(verb) end)
     ui.Run(
-        flagPath, shell, (command: ui.Command): onCommand(command, shell) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) pushPlayback() end,
+        flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) pushPlayback() end,
     )
     ret 0
 end
@@ -197,10 +197,10 @@ end
 // The four focus moves never reach it (the keymap preset performs them);
 // OpenSearch and OpenCommandLine are ui-internal and are consumed by the loop.
 // SearchAccepted reseeds the queue from the rows the new filter keeps, and
-// Quit — reported by stage 07's key, never by `:q` — stops the screen.
-func onCommand(command: ui.Command, shell &: ui.Shell):
+// Quit takes the confirmation path `q` and `:q` share.
+func onCommand(command: ui.Command):
     if command == ui.Command.Quit:
-        shell.screen.stop()
+        ui.RequestQuit()
     else command == ui.Command.PlayPause:
         _ := player.Toggle()
     else command == ui.Command.Next:
@@ -234,7 +234,7 @@ end
 // state is not shared; every controller rejection becomes the footer error line
 // with the controller's own text. `verb.arg` is owned by the caller and freed
 // once this returns, so nothing here may keep it.
-func runVerb(verb: ui.Verb, shell &: ui.Shell):
+func runVerb(verb: ui.Verb):
     if verb.name == "play":
         if verb.arg == "":
             PlaySelected()
@@ -273,7 +273,9 @@ func runVerb(verb: ui.Verb, shell &: ui.Shell):
     else verb.name == "search":
         ui.LibraryFilter(verb.arg)
         SyncQueue()
+    else verb.name == "help":
+        ui.RequestHelp()
     else verb.name == "quit":
-        shell.screen.stop()
+        ui.RequestQuit()
     end
 end

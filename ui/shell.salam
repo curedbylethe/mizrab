@@ -116,6 +116,22 @@ pub const ModeId := 10
 /// The `too small` cover.
 pub const DegradeId := 11
 
+@en "HelpModalId"
+/// The help overlay; hidden at rest.
+pub const HelpModalId := 12
+
+@en "HelpPanelId"
+/// The help overlay's one child, non-focusable.
+pub const HelpPanelId := 13
+
+@en "QuitModalId"
+/// The quit confirmation; hidden at rest.
+pub const QuitModalId := 14
+
+@en "QuitPanelId"
+/// The quit confirmation's one child, non-focusable.
+pub const QuitPanelId := 15
+
 // Which line a Segment draws.
 enum Slot:
     Wordmark
@@ -420,6 +436,10 @@ pub func NewShell(width: int, height: int): Shell:
     _ := screen.add(FooterId, keys)
     _ := screen.add(FooterId, mode)
     _ := screen.add(RootId, degrade)
+    // Both overlays after every layer-0 widget, so the registry order and the
+    // four focus stops stay what they were; hidden Modals are skipped by the
+    // focus order and by paint.
+    NewOverlays(screen)
 
     mut sh := Shell { screen = screen, width = width, height = height }
     // The same path a resize takes, so construction and resize agree.

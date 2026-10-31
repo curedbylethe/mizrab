@@ -325,6 +325,13 @@ pub func SetPlaying(path: str):
     _changed = true
 end
 
+@en "PlayingPath"
+/// The path the player reports, or "" when nothing has played. Borrowed from
+/// the view: it stays valid until the next SetPlaying.
+pub func PlayingPath(): str:
+    ret _playing
+end
+
 @en "LibraryPlayingRow"
 /// The visible position of the playing row, or -1 when it is not visible.
 pub func LibraryPlayingRow(): int:
