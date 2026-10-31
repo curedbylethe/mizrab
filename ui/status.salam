@@ -1,0 +1,67 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The footer's playback status: one glyph and, when the slot holds 11 cells,
+// the word. The footer ladder chooses the width when it resizes, so this
+// widget decides from its own bounds and needs no field of its own.
+//
+// The state is read from the package playback getters at render time, never a
+// field: Screen.add boxes a copy. Focusable, and its focused run is drawn
+// inverse yellow like the other footer segments.
+
+package ui
+
+import "github.com/curedbylethe/basalam/basalam"
+
+// The slot width at which the word joins the glyph; the ladder's other row is
+// 3 cells and holds the glyph alone.
+const _STATUS_WORD_WIDTH := 11
+
+@en "Status"
+/// The playback status segment: glyph, and the word at 11 cells.
+pub struct Status:
+    pub use basalam.BaseWidget
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        tier := basalam.DetectTier()
+        word := PlaybackWord()
+        wide := bounds.width >= _STATUS_WORD_WIDTH
+        head := " " + PlaybackGlyph()
+        if buf.focused:
+            if wide:
+                run := head + " " + word
+                buf.put_str(bounds.x, bounds.y, run, _focus_sgr())
+                _freeStr(run)
+            else:
+                buf.put_str(bounds.x, bounds.y, head, _focus_sgr())
+            end
+            _freeStr(head)
+            ret
+        end
+        mut glyph := basalam.Style { fg = basalam.BrightBlack }
+        if word == "playing" or word == "paused":
+            glyph = basalam.Style { fg = basalam.Green }
+        end
+        buf.put_str(bounds.x, bounds.y, head, basalam.StyleSgr(glyph, tier))
+        if wide:
+            buf.put_str(bounds.x + CellWidth(head) + 1, bounds.y, word, "")
+        end
+        _freeStr(head)
+    end
+end

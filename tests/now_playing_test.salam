@@ -1,0 +1,210 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the now-playing panel and the status segment headless: the 100 × 30
+// clock and bar (asserted as exact run lengths, not just the total), the
+// `--:--` clock with no bar when the duration is unknown, the 40 × 12 drop
+// ladder down to title, clock and bar and the 3-cell status slot, the album
+// line at a tall panel, the row-by-path lookup across the filter, and the
+// inverse run of a focused status. start() is never called, so the golden
+// stays byte-exact.
+
+import str
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+func track(path: str, title: str, artist: str, album: str, ms: i64): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, durationMs = ms, tagged = true,
+        format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+// One track with every field set, so the panel has a title, artist and album
+// to show.
+func one(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue", 338000 as i64))
+    ret indexOf(v)
+end
+
+// Four rows for the filter: one hidden row the panel must still find.
+func four(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue", 338000 as i64))
+    v.push(track("/m/b.flac", "So What", "Miles Davis", "Kind of Blue", 545000 as i64))
+    v.push(track("/m/c.flac", "Nacht", "Nina Hagen", "Nacht", 0 as i64))
+    v.push(track("/m/d.flac", "Freddie Freeloader", "Miles Davis", "Kind of Blue", 0 - 1 as i64))
+    ret indexOf(v)
+end
+
+func charAt(y: int, x: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, 1)
+end
+
+func slice(y: int, x: int, n: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, n)
+end
+
+// 100 × 30: the body is 28 rows, so the panel is 8 rows (inner 6) and all six
+// lines fit. The block is 72 cells wide, centred from x = 14;
+// 134000/338000 of 72 cells is 28 whole cells, the eighth-block index is 3
+// (▌) and 43 cells are left.
+func test_panel_at_100x30():
+    _ := ui.LibraryLoadIndex(one())
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 338000 as i64)
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertEqStr(slice(22, 14, 13, shell.screen.buffer), "Blue in Green")
+    testing.AssertEqStr(slice(23, 14, 11, shell.screen.buffer), "Miles Davis")
+    testing.AssertEqStr(slice(24, 14, 12, shell.screen.buffer), "Kind of Blue")
+    testing.AssertEqStr(slice(25, 14, 1, shell.screen.buffer), " ")
+    testing.AssertEqStr(slice(26, 14, 13, shell.screen.buffer), "02:14 / 05:38")
+    testing.AssertEqStr(slice(27, 14, 28, shell.screen.buffer), str.Repeat("█", 28))
+    testing.AssertEqStr(charAt(27, 42, shell.screen.buffer), "▌")
+    testing.AssertEqStr(slice(27, 43, 43, shell.screen.buffer), str.Repeat("─", 43))
+end
+
+// An unknown duration: the clock prints --:-- on both sides and the ladder
+// stops after the clock, so no bar row is drawn.
+func test_unknown_duration():
+    _ := ui.LibraryLoadIndex(one())
+    ui.SetPlaying("/m/a.flac")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 0 as i64)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(26, 14, 13, shell.screen.buffer), "--:-- / --:--")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(27), "─"))
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(27), "█"))
+
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 0 - 1 as i64)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(26, 14, 13, shell.screen.buffer), "--:-- / --:--")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(27), "─"))
+end
+
+// 40 × 12: the panel is 5 rows (inner 3), so the ladder keeps title, clock and
+// bar only; the footer's third row gives the status 3 cells and the glyph
+// alone.
+func test_floor_at_40x12():
+    _ := ui.LibraryLoadIndex(one())
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 338000 as i64)
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(6), "now playing"))
+    testing.AssertEqStr(slice(7, 2, 13, shell.screen.buffer), "Blue in Green")
+    testing.AssertEqStr(slice(8, 2, 13, shell.screen.buffer), "02:14 / 05:38")
+    testing.AssertEqStr(slice(9, 2, 14, shell.screen.buffer), str.Repeat("█", 14))
+    testing.AssertEqStr(charAt(9, 16, shell.screen.buffer), "▎")
+    testing.AssertEqStr(slice(9, 17, 21, shell.screen.buffer), str.Repeat("─", 21))
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(10), "└"))
+    testing.AssertEqStr(slice(11, 1, 3, shell.screen.buffer), " ▶︎")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(11), "playing"))
+end
+
+// 80 × 24: the body is 22 rows, so the panel is 8 rows (inner 6) and all six
+// lines fit — title, artist, album, spacer, clock, bar.
+func test_album_line():
+    _ := ui.LibraryLoadIndex(one())
+    ui.SetPlaying("/m/a.flac")
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 338000 as i64)
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    shell.screen.draw()
+    testing.AssertEqStr(slice(16, 4, 13, shell.screen.buffer), "Blue in Green")
+    testing.AssertEqStr(slice(17, 4, 11, shell.screen.buffer), "Miles Davis")
+    testing.AssertEqStr(slice(18, 4, 12, shell.screen.buffer), "Kind of Blue")
+    testing.AssertEqStr(slice(19, 2, 1, shell.screen.buffer), " ")
+    testing.AssertEqStr(slice(20, 4, 13, shell.screen.buffer), "02:14 / 05:38")
+
+    tall := basalam.NewBuffer(80, 7)
+    mut panel := ui.NowPlaying {}
+    panel.render(tall, basalam.Rect { width = 80, height = 7 })
+    testing.AssertEqStr(slice(2, 4, 11, tall), "Miles Davis")
+    testing.AssertEqStr(slice(3, 4, 12, tall), "Kind of Blue")
+end
+
+// The panel names the playing track even when the filter hides its row, and a
+// path no row has is a zero Row.
+func test_row_by_path():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("zzz")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 0)
+    row := ui.LibraryRowByPath("/m/b.flac")
+    testing.AssertEqStr(row.path, "/m/b.flac")
+    testing.AssertEqStr(row.title, "So What")
+    testing.AssertEqInt64(row.durationMs, 545000 as i64)
+
+    missing := ui.LibraryRowByPath("/m/nope.flac")
+    testing.AssertEqStr(missing.path, "")
+    testing.AssertEqStr(missing.title, "")
+    testing.AssertEqStr(ui.LibraryRowByPath("").path, "")
+end
+
+// A focused status draws its whole run inverse, glyph and word alike, and an
+// unfocused one carries the word after the green glyph.
+func test_status_focused():
+    ui.SetPlayback("playing", "▶︎", 134000 as i64, 338000 as i64)
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    testing.AssertTrue(shell.screen.focus(ui.StatusId))
+    shell.screen.draw()
+    testing.AssertEqStr(slice(29, 1, 11, shell.screen.buffer), " ▶︎ playing")
+    reverse := term.Sgr(term.StyleReverse)
+    repeat 11 in i:
+        testing.AssertTrue(str.Contains(shell.screen.buffer.get(1 + i, 29).style, reverse))
+    end
+
+    ui.SetPlayback("paused", "‖", 134000 as i64, 338000 as i64)
+    testing.AssertTrue(shell.screen.focus(ui.PlaylistId))
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(29, 1, 9, shell.screen.buffer), " ‖ paused")
+end
+
+func main(): int:
+    test_panel_at_100x30()
+    test_unknown_duration()
+    test_floor_at_40x12()
+    test_album_line()
+    test_row_by_path()
+    test_status_focused()
+    ret testing.Summary()
+end

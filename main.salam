@@ -151,10 +151,28 @@ func runShell(): int:
     defer ui.Release(lock)
     _ := ui.LibraryLoad(config.IndexFile(paths))
     SyncQueue()
+    pushPlayback()
     ui.Run(
-        flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) end,
+        flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) pushPlayback() end,
     )
     ret 0
+end
+
+// The one place the player's state becomes the interface's playback state: the
+// word and glyph the footer shows and the clock the panel shows, read once per
+// tick and once before the first frame so nothing opens on a stale word.
+func pushPlayback():
+    state := player.CurrentState()
+    mut word := "stopped"
+    mut glyph := "■"
+    if state == player.State.Playing:
+        word = "playing"
+        glyph = "▶︎"
+    else state == player.State.Paused:
+        word = "paused"
+        glyph = "‖"
+    end
+    ui.SetPlayback(word, glyph, player.PositionMs(), player.DurationMs())
 end
 
 // The queue is the visible order: a search that narrows the view must not let
