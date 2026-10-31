@@ -1,6 +1,6 @@
 ---
 title: "App shell"
-description: "The mizrab terminal shell: its layout and focus ring, the keys it binds, how it restores the terminal and refuses a second instance, and the recorded startup, shutdown and leak figures."
+description: "The mizrab terminal shell: its layout and focus ring, the playlist, now-playing, search and command screens, the keys it binds, how it restores the terminal and refuses a second instance, and the recorded startup, shutdown, leak and frame figures."
 keywords:
   - "shell"
   - "interface"
@@ -8,31 +8,36 @@ keywords:
   - "terminal"
   - "signals"
   - "startup"
+  - "frame budget"
   - "leaks"
 ---
 
-The app shell is mizrab's terminal interface: one basalam `Screen`, its root tree and one event loop, in the Salam package `ui` (`ui/ui.salam` entry file, `shell.salam`, `loop.salam`, `terminal.salam`, `instance.salam`, `keymap.salam`). A bare `mizrab` with stdin a terminal starts the shell. With stdin **not** a terminal the binary still prints the usage block and exits 0, exactly as before, so scripts and the harness's smoke checks see what they always saw. `--version`, `--help`, `--scan`, `--index` and `--config` are unchanged.
+The app shell is mizrab's terminal interface: one basalam `Screen`, its root tree and one event loop, in the Salam package `ui` (`ui/ui.salam` entry file, `shell.salam`, `loop.salam`, `keymap.salam`, `playlist.salam`, `now_playing.salam`, `status.salam`, `mode.salam`, `command.salam`, `overlay.salam`, `library_view.salam`, `text.salam`, `terminal.salam`, `instance.salam`). A bare `mizrab` with stdin a terminal starts the shell. With stdin **not** a terminal the binary still prints the usage block and exits 0, exactly as before, so scripts and the harness's smoke checks see what they always saw. `--version`, `--help`, `--scan`, `--index` and `--config` are unchanged.
 
-This page is the shell's record: what it draws, what it binds, what it does to the terminal and what it does not do yet. The [configuration](/configuration) page covers the config file and the full keymap; [the playback controller](/playback-controller) covers the layer the shell drives.
+This page is the shell's record: what it draws, what it binds, what it does to the terminal and what it does not do yet. The [configuration](/configuration) page covers the config file and the full keymap; [the playback controller](/playback-controller) covers the layer the shell drives; [basalam findings](/basalam-findings) records the library limitations the interface had to work around.
 
 ## Status
 
-The shell opens and runs: a header, one framed body panel, a footer, four focus stops and an event loop. It is not a finished interface. The keys mizrab binds itself are these six, plus the focus moves basalam's vim preset already provides:
+The shell runs: a header, a body of two framed panels, a footer, four focus stops, an event loop and two overlays. It is not a finished interface — the body is a read-only view of the index — but everything on it works: the playlist reads the index, playback moves the list, search filters it and the command line drives the player.
+
+It binds eight keys of its own on top of basalam's vim preset:
 
 | Key | Action |
 | --- | --- |
 | `space` | play or pause |
 | `n` | next track |
 | `p` | previous track |
-| `:` | command line |
-| `/` | search |
-| `q` | quit |
+| `j`, `k` | move the playlist cursor down and up; they shadow the preset's focus moves while the playlist holds the focus |
+| `Enter` | play the selected row |
+| `/` | open the search prompt |
+| `:` | open the command line |
+| `q` | quit; it confirms while a track plays |
 
-**`:` and `/` record the request and do nothing else yet.** They report a verb to the application; no command line opens and no search runs. The playlist, now-playing, search and command-line screens belong to CUR-508, which also owns the modal layer and the body content. `Esc` is deliberately unbound. The body panel is an empty frame titled `‹body›`, and the modal layer does not exist: the `Stack` keeps the slot for CUR-508 rather than anticipating its widget.
+The footer prompt has three modes — `normal`, `search` and `command` — over the focus ring; a fourth, modal state takes over while an overlay is up, when a second keymap is installed and only `q` and the overlay's own `Esc` are live. A mode is a flag plus the keys stop, not a second keymap.
 
-The three playback keys reach the controller, but there is no playlist yet: the queue is empty, so `n` and `p` are rejected and `space` has nothing to start until CUR-508 loads one.
+Focus movement works: `h`, `j`, `k`, `l`, `Tab`, the arrows, `gg` and `G` come from basalam's vim preset and move the focus ring described below, and the preset uses `Esc` to pop a pushed focus. The set is fixed in this release; there is no `[keys]` section and no remapping.
 
-Focus movement works: `h`, `j`, `k`, `l`, `Tab`, the arrows, `gg` and `G` come from basalam's vim preset and move the focus ring described below. The set is fixed in this release; there is no `[keys]` section and no remapping.
+The three playback keys reach the controller, and the queue is seeded from the rows the playlist shows at start, so `n` and `p` walk the visible order and never a hidden track. `space` starts the current queue entry when nothing is playing, pauses the playing one, and resumes a paused one.
 
 ## Layout
 
@@ -41,35 +46,121 @@ The shell is one `basalam.Screen` whose root is a `Column` of three children:
 | Part | Widget | Contents |
 | --- | --- | --- |
 | Header | `Row` | the wordmark `[ M I Z R A B ]` and a right-aligned `‹context›` text |
-| Body | `Stack` | one framed panel, titled `‹body›`; an empty frame |
-| Footer | `Row` | the playback status `▶︎ playing`, the key hints, and the mode `normal` |
+| Body | `Column` | the playlist panel, filling, above the now-playing panel at 5, 6 or 8 rows |
+| Footer | `Row` | the playback glyph and status word, the keys slot, and the right-aligned mode word |
 
-The context text is a placeholder and stays one until CUR-508 supplies a real value. The status reads `playing` and the mode `normal` for the same reason: nothing updates them yet.
+The body split follows the height: the now-playing panel takes 8 rows when the body has 22 or more, 6 when it has 14 to 21, and 5 below that. At 200 × 60 that is a 50-row playlist and an 8-row panel; at the 40 × 12 floor, 5 and 5.
 
-**Focus ring.** Four stops, in registry order: body → status → keys → mode → body. There is no separate focus list; basalam walks the registered widgets by ascending id, which is the order they were added. The header's wordmark and context segments are never focus stops.
+The context text is still a placeholder, `‹context›`, cut to the space the header leaves it. Everything else on the footer moves: the status word and glyph are pushed from the player once per tick, the now-playing panel reads the same state, and the mode word follows the prompt.
 
-**Colours.** Four ANSI colours, and no theme detection beyond basalam's tier:
+**Focus ring.** Four stops, in registry order: playlist → status → keys → mode → playlist. There is no separate focus list; basalam walks the registered widgets by ascending id, which is the order they were added. The header's wordmark and context segments and the now-playing panel are never focus stops.
+
+**Colours.** Five roles, and no theme detection beyond basalam's tier:
 
 | Role | Colour | Where |
 | --- | --- | --- |
 | Wordmark | 15, bright white, bold | header |
-| Hints and the unfocused frame | 8, bright black | footer keys, body border |
-| Focus | 3, yellow | the focused segment, and the focused body frame |
-| Playback glyph | 2, green | the `▶︎` before the status |
+| Structure and unfocused frames | 8, bright black | hints, body borders, track numbers, durations, the album column, the scroll thumb, the bar's remainder, the error suffix |
+| Focus | 3, yellow | the focused label run, in inverse video, and the focused playlist ring |
+| Playback | 2, green | the `▶︎` before the status word while playing or paused, the `▶︎` on the playing row, the `▶︎` in the quit dialog |
+| Emphasis | 15, bright white, bold | the playlist cursor `>`, the now-playing title, the help keys, the dialog question, the error text |
 
-**Focus is drawn, not announced.** The focused segment paints its label run — the text plus one cell each side — in inverse yellow, and the body frame switches from light to heavy box-drawing with its edges going from bright black to yellow. The mode segment right-aligns; the others left-align.
+**Focus is drawn, not announced.** The focused segment paints its label run — the text plus one cell each side — in inverse yellow, and the focused playlist frame switches from the light ring to the heavy `┏ ━ ┓ ┃ ┗ ┛` one in yellow. The mode segment right-aligns; the others left-align.
 
-**The hint line refits.** At 91 columns and up it reads `space play/pause  n next  p previous  : command  / search  q quit`. Narrower screens shorten the labels, and between 60 and 76 columns whole hints drop in the order `p`, `/`, `n`, `:`. `space` and `q` are never dropped.
+**The footer refits.** It reserves the last ten cells for the mode word. Three rows of the footer are tried in order — the status word with a one-cell gap, the status word with no gap, the glyph alone with no gap — and the first row whose keys slot holds a hint line is taken. Within a row the hint line is the full labels `space play/pause  n next  p previous  : command  / search  q quit`, then the short labels `space play  n next  p prev  : cmd  / search  q quit`, then the short set with whole hints dropped in the order `p`, `/`, `n`, `:`, each drop marked by ` …`. `space` and `q` are never dropped: the narrowest line is `space play  q quit …`, which is what 40 columns shows.
 
-**Below 60 columns or 12 rows the tree is replaced.** The whole `Column` gives way to one centred line, `too small · 60 × 12`, in bright black. `60 × 12` itself is still the drawn layout; only less than that degrades.
+**Below 40 columns or 12 rows the tree is replaced.** The whole `Column` gives way to one centred line, `too small · 40 × 12`, in bright black, and both overlays refuse to open. `40 × 12` itself is still the drawn layout — a 5-row playlist, a 5-row now-playing panel and the glyph-only footer row; only less than that degrades.
 
-**A resize refits the tree and the cover.** The screen reports `ResizeEvent` when the terminal changes size, and the shell applies it to itself as well as to the screen — the screen only refits the root tree, while the shell also owns the degrade cover's bounds and the size `Degraded()` reports. Shrinking a live shell from 100 × 30 to 50 × 10 replaces the tree with the `too small` line, and growing it back restores the tree.
+**A resize refits the tree and the cover.** The screen reports `ResizeEvent` when the terminal changes size, and the shell applies it to itself as well as to the screen — the screen only refits the root tree, while the shell also owns the footer ladder, the body split, the degrade cover's bounds and the size `Degraded()` reports. Shrinking a live shell from 100 × 30 to 50 × 10 replaces the tree with the `too small` line, and growing it back restores the tree.
+
+## Playlist
+
+The first focus stop and the top panel of the body: a framed list of the rows the current filter keeps. The frame is a light ring in bright black, or the heavy ring in yellow while the panel holds the focus, with `playlist` on the top edge.
+
+A row is the cursor and the playing marker, the track number, the artist and title, an optional album column and the duration. The displayed text is `artist — title` at 60 columns and wider and the title alone below; the album column appears at 140 columns and wider and is cut to 32 cells; the duration is right-aligned as `m:ss`. An unknown duration is `--:--`, which is what an MP3, Ogg or WAV row shows, because the index stores no duration for those formats (see [the library](/library)).
+
+The cursor is `>` in bright white bold and the playing row carries a green `▶︎`, matched by exact path. The window is cursor-centred and holds only what fits: 48 rows at 200 × 60 and 3 at the 40 × 12 floor. Only the visible window is formatted on each frame, so a 1,000-track library costs the same frame as a 48-track one; `tests/frame_budget_test.salam` asserts that row count.
+
+When the visible list is longer than the window, a `█` thumb runs down the right inner edge and the bottom border carries `first-last of total`. A loaded but empty library draws `no tracks — run mizrab --scan`, and a filter that keeps nothing draws `no matches`. Below 12 columns or 3 rows of panel height the frame is drawn alone, with no rows and no message.
+
+`j` and `k` move the cursor one row, clamped at both ends and never wrapping; `Enter` plays the selected row, or toggles it when it is already playing. The widget holds no rows of its own: it reads the library view at render time, because `Screen.add` boxes a copy and a cached field could go stale, and `j`/`k` and the filter ask the loop for a repaint.
+
+## Now playing
+
+The bottom body panel, and never a focus stop: a light ring in bright black titled `now playing`, drawn in a block of at most 72 cells and centred.
+
+Height picks what the panel shows. The title, the clock and — when a duration is known — the bar always stay; as the panel shortens it gives up the spacer, then the album, then the artist, then the bar, in that order. At 200 × 60 all six rows fit: the title in bright white bold, the artist, the album in bright black, a blank row, the clock and the bar.
+
+The clock is `mm:ss / mm:ss`. When the duration is not known the panel shows `--:-- / --:--` and draws no bar, which is what an MP3, Ogg or WAV track gets. The bar is the block width in cells: `█` for whole cells, one of `▏▎▍▌▋▊▉` for the eighth, and `─` in bright black for the remainder, all in integer arithmetic from the position and duration pushed each tick.
+
+With no track playing the panel draws its frame alone. A track hidden by the filter still names itself here: the panel looks the playing path up in the loaded rows, not in the visible ones.
+
+## Search
+
+`/` opens the search prompt in the footer's keys slot and focuses it, so every following key belongs to the editor. The slot shows `/`, the query, and — when it has room — the right-aligned `visible of total` count. The mode word reads `search`.
+
+Typing re-filters the playlist on every change: a case-insensitive substring match over artist, title and album, folded one codepoint at a time. Index order is preserved, the filter never reorders, and the cursor is clamped into the new list.
+
+`Enter` accepts: the filter stays, the prompt closes, the focus returns to the playlist and the queue is reseeded from the rows the filter keeps, so `n` and `p` cannot reach a hidden track. `Esc` restores the query that was in force when `/` was pressed and closes. An empty query shows every row again.
+
+The fold is mizrab's own: the pinned `str.Lower` folds A–Z only, so the comparison folds through `unicode.ToFold` instead. A full fold such as `ß` → `ss` still does not match; that limit is recorded on [basalam findings](/basalam-findings).
+
+## Command mode
+
+`:` opens the command line in the same keys slot: `:`, an empty editor and the mode word `command`. Nine verbs, parsed by `ui/command.salam` and executed on the loop thread by `main.salam`:
+
+| Verb | Takes | Does |
+| --- | --- | --- |
+| `play [PATH]` | an optional path | plays the selected row, or the named track |
+| `pause` | nothing | pauses |
+| `next`, `prev` | nothing | moves the queue |
+| `seek SECONDS` | a whole number | seeks within the track |
+| `volume 0-100` | a whole number | sets the volume |
+| `search TEXT` | text | applies the filter and reseeds the queue |
+| `help` | nothing | opens the help panel |
+| `q`, `quit` | nothing | the same quit path as `q` |
+
+`Enter` parses what was typed, never the highlighted completion, and closes the prompt. A verb the parser accepts is queued and run after the key's own drain, so its effect lands on the next frame. A parse error, or a rejection from the controller, replaces the hint line with `:verb message · try :help`, and that line stays until the next normal-mode key. `Tab` applies the highlighted completion, `Down` and `Up` move the highlight, and the popup above the footer lists the matches: nine verbs for an empty line, prefix matches after a name, and the argument takers once a space has been typed.
+
+## Help and quit
+
+`:help` opens the help panel; `q` and `:q` share the quit path. Both are basalam `Modal`s, registered once at construction and hidden, so they sit outside the focus ring and outside the four stops, and a scrim dims the body behind them.
+
+The help panel lists six rows — `hjkl / tab` move focus, `space` play/pause, `n / p` next/previous, `/` search, `:` command, `q` quit (asks first) — and puts `esc close` on its last inner row when there is one to spare. The dialog is 60% of the width clamped to 40..72 cells, and half the height clamped to 8..16.
+
+The quit path confirms only while a track plays. The dialog asks `Quit mizrab? Playback will stop.`, names the track with its playback glyph and the artist, and offers `q quit  esc keep listening`; `q` there stops the screen, and the terminal with it, while `Esc` closes and keeps listening. With nothing playing — or with a playback word and no path — `q` stops the screen at once, with no dialog.
+
+While either panel is up, a second keymap is installed: only `q` and the modal's own `Esc` do anything, so `space`, `n`, `p`, `h`, `j`, `k` and `:` cannot change the world behind the dim. Below 40 × 12 both refuse to open, so the degrade cover stays authoritative.
+
+## Frame budget
+
+The budget is 16 ms per frame at 200 × 60 with a 1,000-track library. Two instruments measure it: `tests/frame-measure.sh`, run by hand, and `tests/frame_budget_test.salam`, the guard in `make check`.
+
+**Method.** `frame-measure.sh` builds `tests/probe/probe_frame.salam`, loads the 1,000-row fixture, warms up three frames and then runs 12 measured frames under a pty (`script -q /dev/null`). One frame is `screen.dirty = true` plus `present()`: the dirty flag forces the full repaint of the 200 × 60 back buffer, and `present()` diffs it against the front grid and writes the changed cells. That is the frame this page budgets. The script prints every raw value plus a min / median / max table with the host, `salam version` and the date in the header, and appends to `build/tests/frame-measure.txt`. Like `tests/shell-measure.sh` it is not a make target and not run by CI.
+
+**Recorded result.**
+
+| Item | Value |
+| --- | --- |
+| Host | macOS 27.0.1, arm64 |
+| Compiler | Salam 0.5.9 |
+| Backend | `null`, no device opened |
+| Runs | 12, at 200 × 60 with 1,000 tracks |
+| Date | 2026-10-31 22:11:14 +0330 |
+| Frame `frame_us`, min / median / max | 435 / 463 / 621 |
+| Budget | 16000 |
+
+On macOS 27.0.1, arm64, on 2026-10-31 (under a pty), at 200 × 60 with 1,000 tracks, a forced full repaint + diff + write took median 463 µs / max 621 µs over 12 pty runs (budget 16 ms, min 435 µs). Excludes terminal-emulator paint and startup. The 100 ms tick makes this input-latency headroom, not a 60 fps claim.
+
+**Scope.** Excluded: startup, the fixture construction, the index load, the terminal setup and the terminal emulator's own paint. What is measured is the shell's own frame cost, drawn, diffed and written to the pty. The spread is real, so quote the median and the range rather than one run.
+
+**The CI guard.** `tests/frame_budget_test.salam` runs headless: it builds the same 1,000 rows and `NewShell(200, 60)`, warms up three frames, then times 50 frames of `dirty = true` + `draw()` + `buffer.ansi()`. It asserts the median is under 4 × 16 ms — a structural ceiling, not the budget, so a shared runner cannot flake it — and asserts the playlist formatted 48 rows, which is what makes the timing mean anything. On this host the guard reported a median of 398 µs. The line goes to stderr so the golden stays byte-exact, and a human reading CI still sees the drift.
 
 ## Terminal safety
 
 Opening the shell means raw mode, the alternate screen and a hidden cursor. Every exit the process controls puts them back:
 
-- **`q`** stops the loop, which closes the screen on the way out.
+- **`q`** stops the loop, which closes the screen on the way out. While a track plays it asks first; the confirmation's `q` is the one that stops.
 - **`Ctrl-C`, SIGTERM and SIGHUP** are handled by one exported handler, installed before the screen opens. It writes the restore bytes — reset the attributes, show the cursor, leave the alternate screen — then restores the terminal mode it captured before raw mode, then calls `_exit(128 + sig)`.
 - **A panic** reaches the same handler. `core.Panic` prints and calls `abort()`, which raises SIGABRT; the handler is installed for SIGABRT too, so it runs and the process exits 134 after the terminal is put back.
 
@@ -133,7 +224,7 @@ The spread is real: the number depends on the machine, its load and the process 
 
 ## Upstream findings
 
-Two limitations were found, both in the language and the compiler rather than in mizrab. Neither has been filed upstream yet; each is written in the four fields of the [upstream findings](/contributing#upstream-findings) convention, and this block is for `FINDINGS.md` (CUR-510) to copy. Both findings share the first two fields. Every value below was measured with `tests/probe/probe.sh`, which is run by hand and is not part of `make test` or CI.
+Two limitations were found, both in the language and the compiler rather than in mizrab. Neither has been filed upstream yet; each is written in the four fields of the [upstream findings](/contributing#upstream-findings) convention, and this block is for `FINDINGS.md` (CUR-510) to copy. Both findings share the first two fields. Every value below was measured with `tests/probe/probe.sh`, which is run by hand and is not part of `make test` or CI. The seven limitations the interface hit in basalam itself live on [basalam findings](/basalam-findings).
 
 **1. Salam version.**
 
@@ -178,8 +269,8 @@ Mitigation shipped: the shell installs one handler for SIGINT, SIGTERM, SIGHUP a
 
 ## Not verified
 
-- **No real-device result.** The startup, shutdown and leak figures are on the null backend. No sound card was opened by any measured run.
-- **No Linux measurement.** Both figures come from one macOS host.
+- **No real-device result.** The startup, shutdown, leak and frame figures are on the null backend. No sound card was opened by any measured run.
+- **No Linux measurement.** Every figure comes from one macOS host.
 - **No long session.** The leak sampling spans 8 seconds and twenty play/stop cycles, not hours.
+- **No interaction measurement.** The frame figure is a forced full repaint, not a keystroke's latency; the 100 ms tick is the only period that is measured.
 - **No screenshot.** The shell has no recorded terminal capture on this page; the render is described, not photographed.
-- **No body content.** The playlist, now-playing, search and command-line screens, the modal layer and the `Esc` binding are CUR-508's, and nothing here measures or describes them.

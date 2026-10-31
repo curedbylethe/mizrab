@@ -50,12 +50,20 @@ Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` 
 | `rescan_test` | `ScanPlan` and `MergeScan` on hand-built data, then `Scan` on real files: what is re-read, what is kept, what drops out |
 | `paths_test` | the [configuration](/configuration) path rule: four absolute XDG values, the fallbacks under `HOME`, a relative variable ignored, a trailing slash cleaned, no `HOME` at all, and the two file helpers |
 | `config_test` | the config reader: the shipped sample loading to the defaults, both keys, every rejection with its line number, a duplicate key, a missing file, and the precedence defaults \< file \< flag |
-| `keymap_test` | the keymap on a headless screen: the preset directions and `/`, `Tab` and the arrows, and the four keys mizrab binds itself, with no terminal |
+| `keymap_test` | the keymap on a headless screen: the preset directions and `/`, `Tab` and the arrows, and the keys mizrab binds itself, with no terminal |
+| `library_view_test` | the library view headless: the index-to-row conversion and its order, the Unicode-folded filter over artist, title and album, the cursor clamp, the playing-row lookup, the two duration formats and the change flag |
+| `frames_test` | headless frame snapshots of the shell at 40 × 12, 80 × 24 and two large sizes: the 40 × 12 frame asserted whole, footer row included |
+| `playlist_test` | the playlist panel headless: the cursor and playing marker columns, the long-title cut, the position run and thumb, both empty states, the stale-boxed-copy guard and the row-bounded render of 1,000 rows |
+| `now_playing_test` | the now-playing panel and the status segment headless: exact clock and bar run lengths, `--:--` with no bar, the 40 × 12 drop ladder and the 3-cell status slot, the album line and the focused status run |
+| `prompt_test` | the footer prompt headless: live filtering with the count, `q` staying in the prompt, Esc restoring the query and the playlist focus, Enter reporting one `SearchAccepted`, and the 40 × 12 keys slot |
+| `command_test` | the command grammar and completion table, and command mode headless: the popup geometry and rows, Down and Tab, Enter submitting the typed text, the error line in both its forms, and Esc without submitting |
+| `overlay_test` | the two overlays headless: help at 100 × 30 and at 40 × 12, the dim, Esc through dispatch and the close drain, re-centring on resize, the quit confirmation, and the 39 × 12 guard |
 | `shell_test` | the [app shell](/app-shell) on a headless screen: the root tree and the panel bounds at 80 × 24 and at 40 × 12, the four focus stops and the ring order, the header never being a stop, the hint ladder and the degrade threshold |
 | `loop_test` | the event loop: the four keys becoming commands, a tick calling the tick callback and reporting nothing, and `q` stopping the loop before any verb is applied |
 | `terminal_test` | the terminal guard, headless: the restore bytes and their order, the absence of a mouse sequence, the flag file replayed and removed, `Begin` and `End`, and `IsTTY` false under the harness |
 | `instance_test` | the single-instance lock: the path rule, the exclusive create, the refusal line, and reclaiming a lock whose pid is dead or whose contents are not a number |
 | `unicode_test` | the measured Unicode record: byte, codepoint, grapheme and `term.Width` numbers for a fixed corpus, and how titles sort |
+| `frame_budget_test` | the 200 × 60 frame budget guard: 50 forced full repaints with 1,000 tracks, the median under a 4 × 16 ms ceiling, and the playlist formatting 48 rows, never 1,000 |
 
 `decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The library tests link `build/library_shim.o`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
 

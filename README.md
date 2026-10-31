@@ -19,8 +19,9 @@ the [Salam](https://github.com/SalamLang/Salam) programming language.
 > `mizrab --scan ROOT...` walks the roots, reads tags and writes a JSON index
 > ([the library](https://mizrab.mintlify.app/library)). It reads a config file
 > at startup ([configuration](https://mizrab.mintlify.app/configuration)) and
-> answers `--version` and `--help`. The shell is not finished: `:` and `/`
-> record the request and open nothing yet.
+> answers `--version` and `--help`. The shell plays: the playlist reads the
+> index, `/` filters it live, `:` runs the command line and `q` quits, asking
+> first while a track plays.
 
 <!-- Screenshot placeholder: replaced by a real capture once the first playable
      build exists. -->
@@ -94,7 +95,8 @@ including `make help` and the opt-in `make soak`.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 
-The player binary imports the Salam standard library (`conv`, `flag`, `os`)
+The player binary imports the Salam standard library (`conv`, `filepath`, `flag`,
+`io`, `os`, `term`, `time`)
 plus its own `commands`, `config`, `library`, `ui` and `player` packages, and
 links the third C object, `build/library_shim.o`; basalam arrives through
 `ui/`. The `library` package additionally uses the `audio.tag` and `audio.flac`
@@ -108,8 +110,10 @@ filesystem packages. The audio engine uses `atomic`, `mem`, `sync` and
 vendored miniaudio and stb_vorbis plus the decode/ring/device engine, `player/`
 the playback controller, `library/` the scanner, tag readers and index,
 `config/` the XDG directory resolver and the config file reader with its
-commented sample, `ui/` the shell, the keymap, the event loop, the terminal
-guard and the instance lock, and `tests/` the harness and its audio fixtures.
+commented sample, `ui/` the shell, the two body panels, the footer segments and
+the prompt, the command parser, the overlays, the library view, the keymap, the
+event loop, the terminal guard and the instance lock, and `tests/` the harness,
+the pty measurement scripts and its audio fixtures.
 [Repository layout](https://mizrab.mintlify.app/repository-layout) describes
 every directory, and [configuration](https://mizrab.mintlify.app/configuration)
 covers the file `config/` reads.

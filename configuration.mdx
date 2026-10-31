@@ -124,7 +124,7 @@ The shape is `mizrab: <path>:<line>: <text>`. The file is read and validated bef
 
 ## Keys
 
-The keymap is in the binary: the shell installs it when it opens. `ui/keymap.salam` declares the nine verbs and the keys that report them: basalam's vim preset plus four bindings of mizrab's own, and the shell adds `q`.
+The keymap is in the binary: the shell installs it when it opens. `ui/keymap.salam` declares the twelve verbs — four focus moves the preset performs, `PlayPause`, `Next`, `Prev`, `PlaySelected`, `OpenSearch`, `OpenCommandLine`, the prompt's `SearchAccepted`, and `Quit` — and the keys that report them: basalam's vim preset plus five global bindings of mizrab's own, and three scoped to the playlist.
 
 | Key | Action | Source |
 | --- | --- | --- |
@@ -138,10 +138,12 @@ The keymap is in the binary: the shell installs it when it opens. `ui/keymap.sal
 | `space` | play or pause | mizrab |
 | `n` | next track | mizrab |
 | `p` | previous track | mizrab |
+| `j`, `k` | playlist cursor down and up | mizrab, playlist only |
+| `Enter` | play the selected row | mizrab, playlist only |
 | `:` | command line | mizrab |
-| `q` | quit the shell | mizrab |
+| `q` | quit; confirms while a track plays | mizrab |
 
-The set is fixed in this release: there is no `[keys]` section and no remapping. `h/j/k/l`, `Tab`, the arrows, `gg`, `G`, `Esc` and `/` come from basalam's `NewVimKeymap` preset, while `space`, `n`, `p` and `:` are mizrab's own bindings on top of it, and the shell's event loop binds `q`. In the current shell, `:` and `/` report their verb and open nothing yet; see [the app shell](/app-shell).
+The set is fixed in this release: there is no `[keys]` section and no remapping. `h/j/k/l`, `Tab`, the arrows, `gg`, `G`, `Esc` and `/` come from basalam's `NewVimKeymap` preset, while `space`, `n`, `p`, `:` and `q` are mizrab's own bindings on top of it, and `j`, `k` and `Enter` are bound to the playlist stop, where they shadow the preset's `j`/`k` focus moves. `:` and `/` open the command line and the search prompt; see [the app shell](/app-shell#command-mode) and [search](/app-shell#search).
 
 ## Limits
 

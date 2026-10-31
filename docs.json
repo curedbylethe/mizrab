@@ -33,7 +33,8 @@
           "audio-engine",
           "playback-controller",
           "spike-miniaudio",
-          "app-shell"
+          "app-shell",
+          "basalam-findings"
         ]
       },
       {
