@@ -42,8 +42,6 @@ const _WORDMARK := "[ M I Z R A B ]"
 
 const _CONTEXT := "‹context›"
 
-const _MODE := "normal"
-
 // Hint labels, full then short, then the short set with whole hints dropped in
 // the order p, /, n, : — space and q are never dropped. Each drop costs two
 // more cells for the trailing ` …` marker.
@@ -107,7 +105,7 @@ pub const FooterId := 7
 pub const StatusId := 8
 
 @en "KeysId"
-/// The hint segment; the prompt owner from stage 05.
+/// The footer keys slot; the prompt widget from stage 05.
 pub const KeysId := 9
 
 @en "ModeId"
@@ -122,7 +120,6 @@ pub const DegradeId := 11
 enum Slot:
     Wordmark
     Context
-    Hints
     Mode
 end
 
@@ -151,10 +148,8 @@ struct Segment:
             label = _WORDMARK
         else this.slot == Slot.Context:
             label = TruncatePath(_CONTEXT, bounds.width - 2 * this.inset)
-        else this.slot == Slot.Hints:
-            label = _fitHints(bounds.width - 2 * this.inset)
         else:
-            label = _MODE
+            label = ModeName(CurrentMode())
         end
         mut run := label
         if this.head != "":
@@ -387,7 +382,7 @@ pub func NewShell(width: int, height: int): Shell:
     playlist := Playlist { title = "playlist" } as dyn basalam.Widget
     nowplaying := NowPlaying {} as dyn basalam.Widget
     status := Status {} as dyn basalam.Widget
-    keys := Segment { slot = Slot.Hints, style = basalam.Style { fg = basalam.BrightBlack }, inset = 1, focus = true } as dyn basalam.Widget
+    keys := Prompt {} as dyn basalam.Widget
     mode := Segment { slot = Slot.Mode, align = basalam.Alignment.Right, inset = 1, focus = true } as dyn basalam.Widget
     degrade := Degrade {} as dyn basalam.Widget
 

@@ -191,7 +191,8 @@ end
 
 // The command handler: the only place in this file that touches the player.
 // The four focus moves never reach it (the keymap preset performs them);
-// OpenSearch and OpenCommandLine are CUR-508 and do nothing yet.
+// OpenSearch and OpenCommandLine are ui-internal and are consumed by the loop.
+// SearchAccepted reseeds the queue from the rows the new filter keeps.
 func onCommand(command: ui.Command):
     if command == ui.Command.PlayPause:
         _ := player.Toggle()
@@ -199,6 +200,8 @@ func onCommand(command: ui.Command):
         _ := player.Next()
     else command == ui.Command.Prev:
         _ := player.Prev()
+    else command == ui.Command.SearchAccepted:
+        SyncQueue()
     else command == ui.Command.PlaySelected:
         path := ui.LibrarySelectedPath()
         if path != "":
