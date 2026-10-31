@@ -13,10 +13,12 @@
  *
  */
 
-// The keymap: basalam's vim preset plus the four keys the library leaves to the
+// The keymap: basalam's vim preset plus the keys the library leaves to the
 // application. Focus movement (h/j/k/l, Tab, the arrows, gg, G) and "/" belong
-// to the preset; space, n, p and : are bound here and report the verbs below
-// through the caller's sink, so the map knows no player and no screen.
+// to the preset; space, n, p and : are bound globally here and report the verbs
+// below through the caller's sink. j/k and Enter are bound to the playlist stop:
+// they move the selection and play it, and they shadow the preset's focus move
+// only while that panel holds the focus. The map knows no player and no screen.
 
 import term
 import "github.com/curedbylethe/basalam/basalam"
@@ -33,15 +35,17 @@ pub enum Command:
     PlayPause
     Next
     Prev
+    PlaySelected
     OpenSearch
     OpenCommandLine
 end
 
 @en "Vim"
 /// Builds the vim-ish keymap: basalam's vim preset, with space, n, p and :
-/// added. "/" and the four focus moves come from the preset. `sink` receives
-/// every verb the map acts on; the install keeps ownership of the returned map
-/// (`set_keymap` frees it), so the caller must not free it afterward.
+/// added globally and j, k and Enter scoped to the playlist. "/" and the four
+/// focus moves come from the preset. `sink` receives every verb the map acts
+/// on; the install keeps ownership of the returned map (`set_keymap` frees it),
+/// so the caller must not free it afterward.
 pub func Vim(sink: func (Command)): basalam.Keymap:
     search := (screen: basalam.Screen*, event: basalam.Event):
         sink(Command.OpenSearch)
@@ -59,6 +63,15 @@ pub func Vim(sink: func (Command)): basalam.Keymap:
     )
     km.bind(
         term.Decode(":"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.OpenCommandLine) ret true end
+    )
+    km.bind_for(
+        PlaylistId, term.Decode("j"), (screen: basalam.Screen*, event: basalam.Event): LibraryMove(1) ret true end
+    )
+    km.bind_for(
+        PlaylistId, term.Decode("k"), (screen: basalam.Screen*, event: basalam.Event): LibraryMove(0 - 1) ret true end
+    )
+    km.bind_for(
+        PlaylistId, term.Decode("\r"), (screen: basalam.Screen*, event: basalam.Event): sink(Command.PlaySelected) ret true end
     )
     ret km
 end

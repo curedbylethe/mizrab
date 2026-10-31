@@ -149,8 +149,26 @@ func runShell(): int:
         ret 1
     end
     defer ui.Release(lock)
-    ui.Run(flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) end)
+    _ := ui.LibraryLoad(config.IndexFile(paths))
+    SyncQueue()
+    ui.Run(
+        flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) end,
+    )
     ret 0
+end
+
+// The queue is the visible order: a search that narrows the view must not let
+// n/p jump to a hidden track. Called on load and, from stage 05, when a search
+// is accepted.
+func SyncQueue():
+    player.QueueClear()
+    paths := ui.LibraryVisiblePaths()
+    defer paths.free()
+    mut i := 0
+    until i < paths.len():
+        player.QueueAdd(paths.get(i))
+        i = i + 1
+    end
 end
 
 // The command handler: the only place in this file that touches the player.
@@ -163,5 +181,15 @@ func onCommand(command: ui.Command):
         _ := player.Next()
     else command == ui.Command.Prev:
         _ := player.Prev()
+    else command == ui.Command.PlaySelected:
+        path := ui.LibrarySelectedPath()
+        if path != "":
+            if path == player.CurrentPath() and player.CurrentState() == player.State.Playing:
+                _ := player.Toggle()
+            else:
+                _ := player.Play(path)
+                _ := player.QueueSetIndex(ui.LibraryCursor())
+            end
+        end
     end
 end

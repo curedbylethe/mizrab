@@ -1,0 +1,261 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the playlist panel headless: the cursor and playing marker at their
+// fixed columns, the long-title cut that never reaches the duration, the
+// position run and thumb only when the list is taller than the panel, both
+// empty states, the mutate-then-assert guard against a stale boxed copy, and
+// the row-bounded render of a 1,000-row in-memory fixture. start() is never
+// called, so the golden stays byte-exact.
+
+import str
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+// Verbs the keymap reported. A package global because a lambda captures by
+// value, so a captured local vector would be a copy.
+mut keyHits := Vector {} as Vector<ui.Command>
+
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+func track(path: str, title: str, artist: str, album: str, ms: i64): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, durationMs = ms, tagged = true,
+        format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+// Four rows: a known artist/title, the long title that must be cut, and two
+// durations that print as a real value and as --:--.
+func four(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue", 545000 as i64))
+    v.push(
+        track(
+            "/m/b.flac",
+            "A Very Long Title That Will Not Fit In The Text Column At Forty Columns Wide Because It Keeps Going",
+            "Nina Hagen", "Nacht", 61000 as i64,
+        )
+    )
+    v.push(track("/m/c.flac", "So What", "Miles Davis", "Kind of Blue", 0 as i64))
+    v.push(track("/m/d.flac", "Freddie Freeloader", "Miles Davis", "Kind of Blue", 0 - 1 as i64))
+    ret indexOf(v)
+end
+
+// `count` rows, so the 12-row shell renders a window instead of the list.
+func many(count: int): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < count:
+        n := i + 1
+        idx.tracks.push(
+            track(
+                "/lib/" + str.FromInt(n as i64) + ".flac", "track " + str.FromInt(n as i64),
+                "Alpha", "First", 180000 as i64 + (i as i64) * 1000 as i64,
+            )
+        )
+        i = i + 1
+    end
+    ret idx
+end
+
+func charAt(y: int, x: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, 1)
+end
+
+func slice(y: int, x: int, n: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, n)
+end
+
+// At 100 × 30 all four rows fit: cursor and marker are independent columns,
+// the number is right-aligned in two cells, the text starts at x + 10, and the
+// duration ends at x + width - 3.
+func test_columns_at_100x30():
+    _ := ui.LibraryLoadIndex(four())
+    ui.SetPlaying("/m/a.flac")
+    testing.AssertTrue(ui.LibrarySetCursor(0))
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertEqStr(charAt(2, 2, shell.screen.buffer), ">")
+    testing.AssertEqStr(slice(2, 4, 2, shell.screen.buffer), "▶︎")
+    testing.AssertEqStr(slice(2, 6, 2, shell.screen.buffer), " 1")
+    testing.AssertTrue(str.StartsWith(slice(2, 10, 81, shell.screen.buffer), "Miles Davis — Blue in Green"))
+    testing.AssertEqStr(slice(2, 93, 5, shell.screen.buffer), " 9:05")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(2), "Kind of Blue"))
+
+    // The long title is cut with an ellipsis and the duration is untouched.
+    testing.AssertTrue(str.Contains(slice(3, 10, 81, shell.screen.buffer), "…"))
+    testing.AssertEqStr(slice(3, 93, 5, shell.screen.buffer), " 1:01")
+    testing.AssertEqStr(charAt(3, 2, shell.screen.buffer), " ")
+    testing.AssertEqStr(slice(3, 4, 2, shell.screen.buffer), "  ")
+
+    // Everything fits, so neither the thumb nor the position run is drawn.
+    testing.AssertEqStr(charAt(2, 98, shell.screen.buffer), " ")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(22), " of "))
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), 4)
+end
+
+// At 40 × 12 the panel is three content rows over twenty tracks: the window
+// scrolls, the thumb sits in the right padding cell and the run is on the
+// bottom border.
+func test_floor_at_40x12():
+    _ := ui.LibraryLoadIndex(many(20))
+    ui.SetPlaying("/lib/2.flac")
+    testing.AssertTrue(ui.LibrarySetCursor(1))
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertEqStr(charAt(3, 2, shell.screen.buffer), ">")
+    testing.AssertEqStr(slice(3, 4, 2, shell.screen.buffer), "▶︎")
+    testing.AssertEqStr(charAt(2, 2, shell.screen.buffer), " ")
+    testing.AssertTrue(str.StartsWith(slice(3, 10, 21, shell.screen.buffer), "track 2"))
+    testing.AssertEqStr(slice(3, 33, 5, shell.screen.buffer), " 3:01")
+    testing.AssertEqStr(charAt(2, 38, shell.screen.buffer), "█")
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(5), "1-3 of 20"))
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), 3)
+end
+
+// A cursor and playing path change between frames: the old cells must be
+// blank and the new ones set. This asserts cells, never view fields, so a
+// stale boxed copy fails here.
+func test_mutate_then_assert():
+    _ := ui.LibraryLoadIndex(four())
+    ui.SetPlaying("/m/a.flac")
+    testing.AssertTrue(ui.LibrarySetCursor(0))
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.draw()
+    testing.AssertEqStr(charAt(2, 2, shell.screen.buffer), ">")
+    testing.AssertEqStr(slice(2, 4, 2, shell.screen.buffer), "▶︎")
+
+    ui.LibraryMove(1)
+    ui.SetPlaying("/m/b.flac")
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    testing.AssertEqStr(charAt(2, 2, shell.screen.buffer), " ")
+    testing.AssertEqStr(slice(2, 4, 2, shell.screen.buffer), "  ")
+    testing.AssertEqStr(charAt(3, 2, shell.screen.buffer), ">")
+    testing.AssertEqStr(slice(3, 4, 2, shell.screen.buffer), "▶︎")
+end
+
+// No rows and a filtered-empty list share the panel but not the copy.
+func test_empty_states():
+    _ := ui.LibraryLoadIndex(library.EmptyIndex())
+    ui.SetPlaying("")
+    mut empty := ui.NewShell(100, 30)
+    defer empty.Close()
+    empty.screen.draw()
+    testing.AssertTrue(str.Contains(empty.screen.buffer.row_text(2), "no tracks — run mizrab --scan"))
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), 0)
+
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("zzz")
+    mut filtered := ui.NewShell(100, 30)
+    defer filtered.Close()
+    filtered.screen.draw()
+    testing.AssertTrue(str.Contains(filtered.screen.buffer.row_text(2), "no matches"))
+    testing.AssertFalse(str.Contains(filtered.screen.buffer.row_text(2), "no tracks"))
+end
+
+// At 200 × 60 the album column appears between the text and the duration.
+func test_album_at_200x60():
+    _ := ui.LibraryLoadIndex(four())
+    ui.SetPlaying("")
+    testing.AssertTrue(ui.LibrarySetCursor(0))
+    mut shell := ui.NewShell(200, 60)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertEqStr(slice(2, 159, 12, shell.screen.buffer), "Kind of Blue")
+    testing.AssertEqStr(slice(2, 193, 5, shell.screen.buffer), " 9:05")
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), 4)
+end
+
+// j/k move the selection only while the playlist holds the focus, and Enter
+// reports PlaySelected; the preset's global j still owns every other stop.
+func test_playlist_keys():
+    _ := ui.LibraryLoadIndex(four())
+    ui.SetPlaying("")
+    keyHits.clear()
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.set_keymap(ui.Vim((command: ui.Command): keyHits.push(command) end))
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+
+    testing.AssertTrue(shell.screen.dispatch(key("j")))
+    testing.AssertEqInt(ui.LibraryCursor(), 1)
+    testing.AssertEqInt(keyHits.len(), 0)
+    testing.AssertTrue(shell.screen.dispatch(key("k")))
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+
+    testing.AssertTrue(shell.screen.dispatch(key("\r")))
+    testing.AssertEqInt(keyHits.len(), 1)
+    testing.AssertTrue(keyHits.get(0) == ui.Command.PlaySelected)
+
+    testing.AssertTrue(shell.screen.focus(ui.StatusId))
+    _ := shell.screen.dispatch(key("j"))
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+end
+
+// 1,000 rows: the cursor is centred in the three-row window, the thumb and the
+// run are present, and the render formatted only the window.
+func test_thousand_rows():
+    _ := ui.LibraryLoadIndex(many(1000))
+    ui.SetPlaying("/lib/501.flac")
+    testing.AssertTrue(ui.LibrarySetCursor(500))
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    shell.screen.draw()
+
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), 3)
+    testing.AssertEqStr(charAt(3, 2, shell.screen.buffer), ">")
+    testing.AssertEqStr(slice(3, 4, 2, shell.screen.buffer), "▶︎")
+    testing.AssertEqStr(charAt(3, 38, shell.screen.buffer), "█")
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(5), "500-502 of 1000"))
+end
+
+func main(): int:
+    test_columns_at_100x30()
+    test_floor_at_40x12()
+    test_mutate_then_assert()
+    test_empty_states()
+    test_album_at_200x60()
+    test_playlist_keys()
+    test_thousand_rows()
+    ret testing.Summary()
+end

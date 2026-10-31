@@ -47,6 +47,11 @@ mut _playing := ""
 
 mut _changed := false
 
+// True once a load has run. A shell constructed without one draws no playlist
+// copy: production always loads before Run, and the empty-shell frame stays
+// empty until it does.
+mut _loaded := false
+
 @en "Row"
 /// One playlist line: the four strings it draws and the duration to format.
 pub struct Row:
@@ -154,6 +159,7 @@ func _load(idx: library.Index): int:
     _cursor = 0
     _rebuild()
     _changed = true
+    _loaded = true
     ret _rows.len()
 end
 
@@ -221,6 +227,20 @@ end
 /// The number of rows the current filter keeps.
 pub func LibraryVisibleCount(): int:
     ret _visible.len()
+end
+
+@en "LibraryVisiblePaths"
+/// The paths of the visible rows, in visible order. The strings are borrowed
+/// from the view: they stay valid until the next load, and the caller frees
+/// only the vector, never the strings.
+pub func LibraryVisiblePaths(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut i := 0
+    until i < _visible.len():
+        out.push(_rows.get(_visible.get(i)).path)
+        i = i + 1
+    end
+    ret out
 end
 
 @en "LibraryMove"
