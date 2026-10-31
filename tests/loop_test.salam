@@ -32,6 +32,22 @@ mut applied := Vector {} as Vector<ui.Command>
 
 mut ticks := 0
 
+// Full-frame paints seen by a widget the test registers. A present() with
+// nothing pending returns before drawing, so this counts the frames the loop
+// forced, not the loop's iterations.
+mut paints := 0
+
+// A widget that only counts the frames it is painted in.
+struct Counter:
+    pub use basalam.BaseWidget
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        _ := buf
+        _ := bounds
+        paints = paints + 1
+    end
+end
+
 // The recorder the loop reports to: the player's place in production.
 func record(command: ui.Command):
     applied.push(command)
@@ -95,7 +111,7 @@ func test_resize_reaches_the_shell():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
     _ := shell.screen.post(
-        basalam.Event { kind = basalam.ResizeEvent, width = 59, height = 12 }
+        basalam.Event { kind = basalam.ResizeEvent, width = 39, height = 12 }
     )
     _ := shell.screen.post(key("q"))
 
@@ -103,10 +119,32 @@ func test_resize_reaches_the_shell():
     testing.AssertTrue(shell.Degraded())
 end
 
+// A key whose command changes the view must repaint even when the event itself
+// touched nothing on screen: the mouse event is unconsumed and dirties no
+// widget, so the extra frame is the ViewChanged drain's.
+func test_view_change_repaints():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    counter := Counter {} as dyn basalam.Widget
+    _ := shell.screen.add(basalam.RootId, counter)
+    counter.set_bounds(basalam.Rect { width = 1, height = 1 })
+
+    _ := shell.screen.post(key(" "))
+    _ := shell.screen.post(basalam.Event { kind = basalam.MouseEvent })
+    _ := shell.screen.post(key("q"))
+    paints = 0
+
+    ui.Run("", shell, (command: ui.Command): ui.LibraryMove(1) end, (): end)
+    testing.AssertEqInt(applied.len(), 0)
+    testing.AssertTrue(paints >= 4)
+    testing.AssertFalse(ui.ViewChanged())
+end
+
 func main(): int:
     test_keys_become_commands()
     test_tick_is_not_a_command()
     test_quit_first_returns_immediately()
     test_resize_reaches_the_shell()
+    test_view_change_repaints()
     ret testing.Summary()
 end

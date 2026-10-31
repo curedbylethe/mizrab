@@ -1,0 +1,127 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Headless frame snapshots of the empty shell: draw() into the screen's back
+// buffer, then read rows back with Buffer.row_text. start() is never called,
+// so the golden is byte-exact and nothing touches the terminal. The sizes are
+// the four the later stages must satisfy: the 40 × 12 floor, the 80 × 24
+// default, and two large ones. The 40 × 12 frame is asserted whole, footer row
+// included, so a clipped hint cannot pass.
+
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../ui/ui.salam"
+
+func assert_row(buf: basalam.Buffer, y: int, want: str):
+    testing.AssertEqStr(buf.row_text(y), want)
+end
+
+// The whole 12-row frame at the floor: header, playlist panel (focused, so
+// heavy), now-playing panel (light), and the entire footer row.
+func test_frame_at_40x12():
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    shell.screen.draw()
+    assert_row(shell.screen.buffer, 0, "  [ M I Z R A B ]            ‹context›  ")
+    assert_row(shell.screen.buffer, 1, "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━┓")
+    assert_row(shell.screen.buffer, 2, "┃                                      ┃")
+    assert_row(shell.screen.buffer, 3, "┃                                      ┃")
+    assert_row(shell.screen.buffer, 4, "┃                                      ┃")
+    assert_row(shell.screen.buffer, 5, "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+    assert_row(shell.screen.buffer, 6, "┌─ now playing ────────────────────────┐")
+    assert_row(shell.screen.buffer, 7, "│                                      │")
+    assert_row(shell.screen.buffer, 8, "│                                      │")
+    assert_row(shell.screen.buffer, 9, "│                                      │")
+    assert_row(shell.screen.buffer, 10, "└──────────────────────────────────────┘")
+    assert_row(shell.screen.buffer, 11, "  ▶︎ space play  q quit …       normal  ")
+end
+
+// 80 × 24: the header, the first body row, the panel boundary and the footer.
+func test_frame_at_80x24():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    shell.screen.draw()
+    assert_row(
+        shell.screen.buffer, 0,
+        "  [ M I Z R A B ]                                                    ‹context›  "
+    )
+    assert_row(
+        shell.screen.buffer, 1,
+        "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+    )
+    assert_row(
+        shell.screen.buffer, 17,
+        "┌─ now playing ────────────────────────────────────────────────────────────────┐",
+    )
+    assert_row(
+        shell.screen.buffer, 23,
+        "  ▶︎ playing  space play  n next  p prev  : cmd  / search  q quit       normal  ",
+    )
+end
+
+// 100 × 30: the short labels still hold, with the 6-row now-playing panel.
+func test_frame_at_100x30():
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.draw()
+    assert_row(
+        shell.screen.buffer, 0,
+        "  [ M I Z R A B ]                                                                        ‹context›  ",
+    )
+    assert_row(
+        shell.screen.buffer, 1,
+        "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+    )
+    assert_row(
+        shell.screen.buffer, 23,
+        "┌─ now playing ────────────────────────────────────────────────────────────────────────────────────┐",
+    )
+    assert_row(
+        shell.screen.buffer, 29,
+        "  ▶︎ playing  space play/pause  n next  p previous  : command  / search  q quit             normal  ",
+    )
+end
+
+// 200 × 60: the full hint set and the mode right-aligned at width − 2.
+func test_frame_at_200x60():
+    mut shell := ui.NewShell(200, 60)
+    defer shell.Close()
+    shell.screen.draw()
+    assert_row(
+        shell.screen.buffer, 0,
+        "  [ M I Z R A B ]                                                                                                                                                                            ‹context›  ",
+    )
+    assert_row(
+        shell.screen.buffer, 1,
+        "┏━ playlist ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓",
+    )
+    assert_row(
+        shell.screen.buffer, 53,
+        "┌─ now playing ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐",
+    )
+    assert_row(
+        shell.screen.buffer, 59,
+        "  ▶︎ playing  space play/pause  n next  p previous  : command  / search  q quit                                                                                                                 normal  ",
+    )
+end
+
+func main(): int:
+    test_frame_at_40x12()
+    test_frame_at_80x24()
+    test_frame_at_100x30()
+    test_frame_at_200x60()
+    ret testing.Summary()
+end

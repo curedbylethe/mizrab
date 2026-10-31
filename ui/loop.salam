@@ -85,6 +85,12 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
             sh.screen.dirty = true
         end
         consumed := sh.screen.dispatch(ev)
+        // A key that changed a view mutates package state, not the screen, so
+        // the loop requests the repaint the widget could not.
+        if ViewChanged():
+            sh.screen.dirty = true
+            ClearViewChanged()
+        end
         if ev.kind == basalam.ResizeEvent:
             // After dispatch, not before: dispatch resizes the screen and lays
             // the root out again, which would overwrite the cover's bounds.
