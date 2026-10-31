@@ -1,0 +1,81 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The one place text is cut to fit a cell budget. term.Width counts one cell
+// per codepoint, which is what Buffer.put_str writes, so a width here is a
+// cell count (a combining mark costs a cell; the terminal may disagree).
+// Truncate cuts the right edge for list rows and the header context;
+// TruncatePath keeps a path's tail and marks the cut with `…/`.
+
+package ui
+
+import str
+import term
+
+@en "CellWidth"
+/// The width of `s` in cells: term.Width, one cell per codepoint.
+pub func CellWidth(s: str): int:
+    ret term.Width(s)
+end
+
+@en "Truncate"
+/// `s` when it fits in `max` cells; otherwise its first `max - 1` cells and a
+/// trailing `…`. `max <= 0` yields "".
+pub func Truncate(s: str, max: int): str:
+    if CellWidth(s) <= max:
+        ret s
+    end
+    if max <= 0:
+        ret ""
+    end
+    ret str.CharSubstr(s, 0, max - 1) + "…"
+end
+
+@en "TruncatePath"
+/// `s` when it fits in `max` cells; otherwise the longest `/`-separated tail
+/// that fits behind a `…/` marker. A string with no usable separator falls
+/// back to Truncate. `max <= 1` yields "".
+pub func TruncatePath(s: str, max: int): str:
+    if CellWidth(s) <= max:
+        ret s
+    end
+    if max <= 1:
+        ret ""
+    end
+    n := str.CharCount(s)
+    mut i := 0
+    mut cut := 0 - 1
+    until i < n and cut < 0:
+        if str.CharAt(s, i) == "/" and CellWidth(str.CharSubstr(s, i + 1, n - i - 1)) <= max - 2:
+            cut = i
+        end
+        i = i + 1
+    end
+    if cut < 0:
+        ret Truncate(s, max)
+    end
+    ret "…/" + str.CharSubstr(s, cut + 1, n - cut - 1)
+end
+
+@en "PadLeft"
+/// `s` right-aligned in `width` cells by prefixing spaces. Never truncates: a
+/// string at least that wide is returned unchanged.
+pub func PadLeft(s: str, width: int): str:
+    n := width - CellWidth(s)
+    if n <= 0:
+        ret s
+    end
+    ret str.Repeat(" ", n) + s
+end

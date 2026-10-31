@@ -13,13 +13,13 @@
  *
  */
 
-// Drives ui.Shell headless: the root bounds, the hand-computed refit rects at
-// 40 × 12, the four stops in ring order, the two header texts that are never
-// stops, the hint ladder and the degrade threshold. start() is never called,
+// Drives ui.Shell headless: the root bounds, the refit rects at 40 × 12 and
+// 80 × 24, the four stops in ring order, the two header texts that are never
+// stops, the footer ladder and the degrade threshold. start() is never called,
 // so the golden stays byte-exact.
 //
-// Widget ids follow from the Screen.add order: 0 root, 1 header, 2 wordmark,
-// 3 context, 4 body Stack, 5 body Panel, 6 footer, 7 status, 8 keys, 9 mode.
+// Widget ids are the registry constants beside NewShell; no test writes a raw
+// id.
 
 import testing
 import "github.com/curedbylethe/basalam/basalam"
@@ -33,102 +33,141 @@ func assert_rect(got: basalam.Rect, x: int, y: int, w: int, h: int):
     testing.AssertEqInt(got.height, h)
 end
 
-// At 80 × 24 the root fills the screen and the body panel is stop 1.
+// At 80 × 24 the root fills the screen, the playlist is stop 1, and the body
+// is tall enough for the 6-row now-playing panel.
 func test_construction():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
     assert_rect(shell.screen.root.bounds(), 0, 0, 80, 24)
-    testing.AssertEqInt(shell.screen.focused_id(), 5)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    assert_rect(shell.screen.widget(ui.BodyId).bounds(), 0, 1, 80, 22)
+    assert_rect(shell.screen.widget(ui.PlaylistId).bounds(), 0, 1, 80, 16)
+    assert_rect(shell.screen.widget(ui.NowPlayingId).bounds(), 0, 17, 80, 6)
 end
 
-// The refit at 40 × 12. Every rect below is hand-written: header h 1, body
-// h 10, footer h 1; header pad-x 2 gap 2 leaves the context 19 cells; footer
-// pad-x 1 gap 1 leaves the keys 16 cells.
+// The refit at 40 × 12. Header h 1, body h 10, footer h 1; the body split is
+// playlist 5 + now playing 5, and the footer takes the third ladder row:
+// status 3, no gap, keys 26, mode at width − 10.
 func test_refit_at_40x12():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
     shell.Resize(40, 12)
 
     assert_rect(shell.screen.root.bounds(), 0, 0, 40, 12)
-    assert_rect(shell.screen.widget(1).bounds(), 0, 0, 40, 1)
-    assert_rect(shell.screen.widget(2).bounds(), 2, 0, 15, 1)
-    assert_rect(shell.screen.widget(3).bounds(), 19, 0, 19, 1)
-    assert_rect(shell.screen.widget(4).bounds(), 0, 1, 40, 10)
-    assert_rect(shell.screen.widget(5).bounds(), 0, 1, 40, 10)
-    assert_rect(shell.screen.widget(6).bounds(), 0, 11, 40, 1)
-    assert_rect(shell.screen.widget(7).bounds(), 1, 11, 11, 1)
-    assert_rect(shell.screen.widget(8).bounds(), 13, 11, 16, 1)
-    assert_rect(shell.screen.widget(9).bounds(), 30, 11, 9, 1)
+    assert_rect(shell.screen.widget(ui.HeaderId).bounds(), 0, 0, 40, 1)
+    assert_rect(shell.screen.widget(ui.WordmarkId).bounds(), 2, 0, 15, 1)
+    assert_rect(shell.screen.widget(ui.ContextId).bounds(), 19, 0, 19, 1)
+    assert_rect(shell.screen.widget(ui.BodyId).bounds(), 0, 1, 40, 10)
+    assert_rect(shell.screen.widget(ui.PlaylistId).bounds(), 0, 1, 40, 5)
+    assert_rect(shell.screen.widget(ui.NowPlayingId).bounds(), 0, 6, 40, 5)
+    assert_rect(shell.screen.widget(ui.FooterId).bounds(), 0, 11, 40, 1)
+    assert_rect(shell.screen.widget(ui.StatusId).bounds(), 1, 11, 3, 1)
+    assert_rect(shell.screen.widget(ui.KeysId).bounds(), 4, 11, 26, 1)
+    assert_rect(shell.screen.widget(ui.ModeId).bounds(), 30, 11, 9, 1)
 end
 
-// The ring is registry order: body → status → keys → mode → body, and a fifth
-// step repeats the second stop.
+// At 80 × 24 the footer takes the first ladder row: status 11, gap 1, keys 56.
+func test_footer_at_80x24():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    assert_rect(shell.screen.widget(ui.StatusId).bounds(), 1, 23, 11, 1)
+    assert_rect(shell.screen.widget(ui.KeysId).bounds(), 13, 23, 56, 1)
+    assert_rect(shell.screen.widget(ui.ModeId).bounds(), 70, 23, 9, 1)
+end
+
+// The ring is registry order: playlist → status → keys → mode → playlist, and
+// a fifth step repeats the second stop.
 func test_focus_ring():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
     ids := shell.FocusOrder()
     defer ids.free()
     testing.AssertEqInt(ids.len(), 4)
-    testing.AssertEqInt(ids.get(0), 5)
-    testing.AssertEqInt(ids.get(1), 7)
-    testing.AssertEqInt(ids.get(2), 8)
-    testing.AssertEqInt(ids.get(3), 9)
+    testing.AssertEqInt(ids.get(0), ui.PlaylistId)
+    testing.AssertEqInt(ids.get(1), ui.StatusId)
+    testing.AssertEqInt(ids.get(2), ui.KeysId)
+    testing.AssertEqInt(ids.get(3), ui.ModeId)
 
-    testing.AssertEqInt(shell.screen.focused_id(), 5)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
     testing.AssertTrue(shell.screen.focus_next())
-    testing.AssertEqInt(shell.screen.focused_id(), 7)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.StatusId)
     testing.AssertTrue(shell.screen.focus_next())
-    testing.AssertEqInt(shell.screen.focused_id(), 8)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.KeysId)
     testing.AssertTrue(shell.screen.focus_next())
-    testing.AssertEqInt(shell.screen.focused_id(), 9)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.ModeId)
     testing.AssertTrue(shell.screen.focus_next())
-    testing.AssertEqInt(shell.screen.focused_id(), 5)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
     testing.AssertTrue(shell.screen.focus_next())
-    testing.AssertEqInt(shell.screen.focused_id(), 7)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.StatusId)
 end
 
-// The wordmark and the context are never focus stops.
+// The wordmark and the context are never focus stops; the now-playing panel
+// is not one either.
 func test_header_is_not_a_stop():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
-    testing.AssertFalse(shell.screen.can_focus(2))
-    testing.AssertFalse(shell.screen.can_focus(3))
-    testing.AssertTrue(shell.screen.can_focus(5))
-    testing.AssertTrue(shell.screen.can_focus(7))
-    testing.AssertTrue(shell.screen.can_focus(8))
-    testing.AssertTrue(shell.screen.can_focus(9))
+    testing.AssertFalse(shell.screen.can_focus(ui.HeaderId))
+    testing.AssertFalse(shell.screen.can_focus(ui.WordmarkId))
+    testing.AssertFalse(shell.screen.can_focus(ui.ContextId))
+    testing.AssertFalse(shell.screen.can_focus(ui.NowPlayingId))
+    testing.AssertTrue(shell.screen.can_focus(ui.PlaylistId))
+    testing.AssertTrue(shell.screen.can_focus(ui.StatusId))
+    testing.AssertTrue(shell.screen.can_focus(ui.KeysId))
+    testing.AssertTrue(shell.screen.can_focus(ui.ModeId))
 end
 
 // Full labels at 100, short labels at 80, and at 65 the p and / hints are
-// already dropped while space and q stay.
-func test_hint_ladder():
+// dropped and the cut is marked; at the 40 × 12 floor only space and q stay.
+func test_footer_ladder():
     mut shell := ui.NewShell(100, 30)
     defer shell.Close()
     testing.AssertEqStr(shell.Hints(100), "space play/pause  n next  p previous  : command  / search  q quit")
     testing.AssertEqStr(shell.Hints(80), "space play  n next  p prev  : cmd  / search  q quit")
-    testing.AssertEqStr(shell.Hints(65), "space play  n next  : cmd  q quit")
+    testing.AssertEqStr(shell.Hints(65), "space play  n next  : cmd  q quit …")
+    testing.AssertEqStr(shell.Hints(40), "space play  q quit …")
 end
 
-// The degrade line takes over below 60 columns or 12 rows; 60 × 12 itself is
+// The degrade line takes over below 40 columns or 12 rows; 40 × 12 itself is
 // still the drawn layout.
 func test_degrade_threshold():
     mut shell := ui.NewShell(80, 24)
     defer shell.Close()
     testing.AssertFalse(shell.Degraded())
-    shell.Resize(60, 12)
+    shell.Resize(40, 12)
     testing.AssertFalse(shell.Degraded())
-    shell.Resize(59, 12)
+    shell.Resize(39, 12)
     testing.AssertTrue(shell.Degraded())
-    shell.Resize(60, 11)
+    shell.Resize(40, 11)
     testing.AssertTrue(shell.Degraded())
+    shell.Resize(80, 24)
+    testing.AssertFalse(shell.Degraded())
+    shell.Resize(100, 30)
+    testing.AssertFalse(shell.Degraded())
+    shell.Resize(200, 60)
+    testing.AssertFalse(shell.Degraded())
+end
+
+// The truncation helpers: the one path every later stage cuts text with.
+func test_text_fit():
+    testing.AssertEqInt(ui.CellWidth("abc"), 3)
+    testing.AssertEqStr(ui.Truncate("abc", 3), "abc")
+    testing.AssertEqStr(ui.Truncate("abcdef", 4), "abc…")
+    testing.AssertEqStr(ui.Truncate("abcdef", 0), "")
+    testing.AssertEqStr(ui.TruncatePath("/a/b/c", 5), "…/b/c")
+    testing.AssertEqStr(ui.TruncatePath("/a/b/c", 6), "/a/b/c")
+    testing.AssertEqStr(ui.TruncatePath("abc", 2), "a…")
+    testing.AssertEqStr(ui.PadLeft("x", 3), "  x")
+    testing.AssertEqStr(ui.PadLeft("abcdef", 3), "abcdef")
 end
 
 func main(): int:
     test_construction()
     test_refit_at_40x12()
+    test_footer_at_80x24()
     test_focus_ring()
     test_header_is_not_a_stop()
-    test_hint_ladder()
+    test_footer_ladder()
     test_degrade_threshold()
+    test_text_fit()
     ret testing.Summary()
 end

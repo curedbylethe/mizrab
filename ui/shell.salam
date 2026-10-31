@@ -14,16 +14,23 @@
  */
 
 // The app shell: one basalam Screen whose root is a Column of a header Row, a
-// body Stack and a footer Row. The four focus stops are the body panel and the
-// three footer segments, in the order the widgets are added: basalam walks the
-// registry by ascending id, so insertion order is the focus ring and there is
-// no separate focus list. Every container child is also registered on the
-// screen with the same value, or it would be positioned and never painted.
+// body Column of two framed panels and a footer Row. The four focus stops are
+// the playlist panel and the three footer segments, in the order the widgets
+// are added: basalam walks the registry by ascending id, so insertion order is
+// the focus ring and there is no separate focus list. Every container child is
+// also registered on the screen with the same value, or it would be positioned
+// and never painted.
 //
-// Geometry (DESIGN.md §1): header h 1, pad-x 2, gap 2, wordmark 15 + context
-// fill; body fill; footer h 1, pad-x 1, gap 1, status 11 + keys fill + mode 9.
-// The hint ladder and the `< 60 × 12` degrade line are refit rules, not
-// content: both are derived from the widget's own bounds when it renders.
+// Geometry (STAGE-02): header h 1, pad-x 2, gap 2, wordmark 15 + context fill;
+// body fill, a Column of playlist Fill and now playing Fixed 5 (body shorter
+// than 14 rows) or Fixed 6; footer h 1, pad-x 1, status 11 or 3 + keys fill +
+// mode 9. The footer ladder and the `< 40 × 12` degrade line are refit rules,
+// not content: both are derived from the width when the shell resizes.
+//
+// basalam boxes a container as a `dyn Widget`, and a box cannot be downcast,
+// so Resize places the footer slots and the two body panels itself instead of
+// mutating the Row/Column slot sizes. A container still lays its children out
+// first; those rects are overwritten in the same call, before any paint.
 
 package ui
 
@@ -41,8 +48,9 @@ const _STATUS := "playing"
 
 const _MODE := "normal"
 
-// Hint labels, widest first. The 60–76 band drops whole hints in the order p,
-// /, n, : and never drops space or q (DESIGN.md §5).
+// Hint labels, full then short, then the short set with whole hints dropped in
+// the order p, /, n, : — space and q are never dropped. Each drop costs two
+// more cells for the trailing ` …` marker.
 const _HINTS_FULL := "space play/pause  n next  p previous  : command  / search  q quit"
 
 const _HINTS_SHORT := "space play  n next  p prev  : cmd  / search  q quit"
@@ -55,16 +63,64 @@ const _HINTS_NO_P_SLASH_N := "space play  : cmd  q quit"
 
 const _HINTS_MIN := "space play  q quit"
 
-const _DEGRADE := "too small · 60 × 12"
+const _DEGRADE := "too small · 40 × 12"
 
-const _MIN_WIDTH := 60
+const _MIN_WIDTH := 40
 
 const _MIN_HEIGHT := 12
 
-// With the footer geometry above, the keys run has width − 25 cells available
-// inside its own 1-cell pad: W − 2 (footer pad) − 11 (status) − 9 (mode) − 2
-// (gaps) − 1 (keys pad).
-const _KEYS_RESERVE := 25
+// The mode slot and the right pad: the footer reserves W - 10 for the mode.
+const _MODE_WIDTH := 9
+
+// The widget registry, in Screen.add order. focus_order() sorts by id, so the
+// ascending ids are the focus ring: playlist, status, keys, mode.
+@en "RootId"
+/// The screen's root widget id; basalam assigns it.
+pub const RootId := 0
+
+@en "HeaderId"
+/// The header Row.
+pub const HeaderId := 1
+
+@en "WordmarkId"
+/// The `[ M I Z R A B ]` segment.
+pub const WordmarkId := 2
+
+@en "ContextId"
+/// The right-aligned context segment.
+pub const ContextId := 3
+
+@en "BodyId"
+/// The body Column holding the two panels.
+pub const BodyId := 4
+
+@en "PlaylistId"
+/// The playlist panel: the first focus stop.
+pub const PlaylistId := 5
+
+@en "NowPlayingId"
+/// The now-playing panel; never a focus stop.
+pub const NowPlayingId := 6
+
+@en "FooterId"
+/// The footer Row.
+pub const FooterId := 7
+
+@en "StatusId"
+/// The playback status segment.
+pub const StatusId := 8
+
+@en "KeysId"
+/// The hint segment; the prompt owner from stage 05.
+pub const KeysId := 9
+
+@en "ModeId"
+/// The mode segment.
+pub const ModeId := 10
+
+@en "DegradeId"
+/// The `too small` cover.
+pub const DegradeId := 11
 
 // Which line a Segment draws.
 enum Slot:
@@ -76,7 +132,7 @@ enum Slot:
 end
 
 // One line of text in the shell. The focused segment draws its label run —
-// the text plus one cell each side — inverse yellow (DESIGN.md §3); the label
+// the text plus one cell each side — inverse yellow (STAGE-02); the label
 // itself is derived per render, so a resize needs no widget mutation.
 struct Segment:
     pub use basalam.BaseWidget
@@ -99,17 +155,20 @@ struct Segment:
         if this.slot == Slot.Wordmark:
             label = _WORDMARK
         else this.slot == Slot.Context:
-            label = _elide(_CONTEXT, bounds.width - 2 * this.inset)
+            label = TruncatePath(_CONTEXT, bounds.width - 2 * this.inset)
         else this.slot == Slot.Status:
-            label = _STATUS
+            // The 3-cell status slot holds the glyph alone; 11 holds the word.
+            if bounds.width >= 11:
+                label = _STATUS
+            end
         else this.slot == Slot.Hints:
-            label = _hints(bounds.width - 1)
+            label = _fitHints(bounds.width - 2 * this.inset)
         else:
             label = _MODE
         end
         mut run := label
         if this.head != "":
-            run = this.head + " " + label
+            run = label == "" ? this.head : this.head + " " + label
         end
         mut x := bounds.x + this.inset
         if this.align == basalam.Alignment.Right:
@@ -128,8 +187,8 @@ struct Segment:
     end
 end
 
-// The body panel: a light single-line frame, heavy and yellow while focused
-// (DESIGN.md §2–§3). The title rides the top edge from x + 2 as one run.
+// The panel: a light single-line frame, heavy and yellow while focused. The
+// title rides the top edge from x + 2 as one run.
 struct Frame:
     pub use basalam.BaseWidget
 
@@ -143,12 +202,12 @@ struct Frame:
     pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
         tier := basalam.DetectTier()
         mut edge := basalam.Style { fg = basalam.BrightBlack }
-        mut border := basalam.BorderStyle.Single
         if buf.focused:
             edge = basalam.Style { fg = basalam.Yellow }
-            border = basalam.BorderStyle.Double
+            _draw_heavy(buf, bounds, edge)
+        else:
+            basalam.DrawBorder(buf, bounds, basalam.BorderStyle.Single, edge, "")
         end
-        basalam.DrawBorder(buf, bounds, border, edge, "")
         if bounds.width < 6:
             ret
         end
@@ -161,7 +220,7 @@ struct Frame:
     end
 end
 
-// The degrade cover: at less than 60 × 12 it clears every cell and writes one
+// The degrade cover: at less than 40 × 12 it clears every cell and writes one
 // centred line in bright black, so the Column underneath is not drawn.
 struct Degrade:
     pub use basalam.BaseWidget
@@ -183,55 +242,89 @@ struct Degrade:
 end
 
 @en "Shell"
-/// The app shell: the screen, its root tree and the ids of the widgets in the
-/// focus ring. Build it with NewShell or NewTerminalShell.
+/// The app shell: the screen and its root tree. Build it with NewShell or
+/// NewTerminalShell.
 pub struct Shell:
     @en "screen"
     /// The one Screen the shell owns. Never copy it: it holds the buffer, the
     /// widget tree, the event channel and the thread handles.
     pub screen: basalam.Screen
 
-    degrade: dyn basalam.Widget
-    body_id: int = -1
-    status_id: int = -1
-    keys_id: int = -1
-    mode_id: int = -1
     width: int = 0
     height: int = 0
 
     @en "Resize"
-    /// Refits the root tree to `width` × `height` and keeps the degrade cover
-    /// the size of the screen.
+    /// Refits the root tree to `width` × `height`: the footer ladder picks the
+    /// status width, the gap and the keys width, and the body split picks the
+    /// now-playing height. The degrade cover keeps the size of the screen.
     pub func Resize(width: int, height: int):
+        row := _footerCase(width)
+        mut status := 11
+        if row == 2:
+            status = 3
+        end
+        mut gap := 1
+        if row > 0:
+            gap = 0
+        end
+        keys_x := 1 + status + gap
         this.screen.resize(width, height)
+        y := height - 1
+        this.screen.widget(StatusId).set_bounds(
+            basalam.Rect { x = 1, y = y, width = status, height = 1 }
+        )
+        this.screen.widget(KeysId).set_bounds(
+            basalam.Rect { x = keys_x, y = y, width = width - 10 - gap - keys_x, height = 1 }
+        )
+        this.screen.widget(ModeId).set_bounds(
+            basalam.Rect { x = width - 10, y = y, width = _MODE_WIDTH, height = 1 }
+        )
+        body := height - 2
+        mut now := 5
+        if body >= 14:
+            now = 6
+        end
+        this.screen.widget(PlaylistId).set_bounds(
+            basalam.Rect { x = 0, y = 1, width = width, height = body - now }
+        )
+        this.screen.widget(NowPlayingId).set_bounds(
+            basalam.Rect { x = 0, y = 1 + body - now, width = width, height = now }
+        )
         this.width = width
         this.height = height
-        this.degrade.set_bounds(basalam.Rect { width = width, height = height })
+        this.screen.widget(DegradeId).set_bounds(basalam.Rect { width = width, height = height })
     end
 
     @en "FocusOrder"
-    /// The focus stop ids in ring order: body, status, keys, mode. This is the
-    /// registry order the widgets were added in, restated so STAGE-02 can wire
-    /// the keymap without scanning the tree. The caller frees the vector.
+    /// The focus stop ids in ring order: playlist, status, keys, mode. The
+    /// caller frees the vector.
     pub func FocusOrder(): Vector<int>:
         mut ids := Vector {} as Vector<int>
-        ids.push(this.body_id)
-        ids.push(this.status_id)
-        ids.push(this.keys_id)
-        ids.push(this.mode_id)
+        ids.push(PlaylistId)
+        ids.push(StatusId)
+        ids.push(KeysId)
+        ids.push(ModeId)
         ret ids
     end
 
     @en "Hints"
-    /// The footer hint line at a screen width of `width` columns: full labels
-    /// at 91 and up, short labels at 77–90, whole hints dropped lowest-first
-    /// at 60–76.
+    /// The footer hint line at a screen width of `width` columns: the full
+    /// labels, the short labels, then whole hints dropped lowest-first.
     pub func Hints(width: int): str:
-        ret _hints(width - _KEYS_RESERVE)
+        row := _footerCase(width)
+        mut status := 11
+        if row == 2:
+            status = 3
+        end
+        mut gap := 1
+        if row > 0:
+            gap = 0
+        end
+        ret _fitHints(width - 10 - gap - (1 + status + gap) - 2)
     end
 
     @en "Degraded"
-    /// True below 60 columns or 12 rows, where the Column is replaced by the
+    /// True below 40 columns or 12 rows, where the tree is replaced by the
     /// `too small` line.
     pub func Degraded(): bool:
         ret this.width < _MIN_WIDTH or this.height < _MIN_HEIGHT
@@ -250,43 +343,74 @@ func _focus_sgr(): str:
     ret basalam.StyleSgr(basalam.Style { fg = basalam.Yellow }, basalam.DetectTier()) + term.Sgr(term.StyleReverse)
 end
 
-// The hint line for `avail` cells in the keys run. Bands first, then the drop
-// ladder; space and q are always kept (DESIGN.md §5).
-func _hints(avail: int): str:
-    if avail >= 66:
-        ret _HINTS_FULL
+// The heavy ring basalam has no BorderStyle for: a focused panel draws
+// ┏ ━ ┓ ┃ ┗ ┛ (STAGE-02 artifact), not the ╔ ═ ╗ that Double uses.
+func _draw_heavy(buf: basalam.Buffer, bounds: basalam.Rect, style: basalam.Style):
+    if bounds.width <= 1 or bounds.height <= 1:
+        ret
     end
-    if avail >= 52:
-        ret _HINTS_SHORT
+    sgr := basalam.StyleSgr(style, basalam.DetectTier())
+    w := bounds.width - 1
+    h := bounds.height - 1
+    bar := str.Repeat("━", w - 1)
+    buf.put_str(bounds.x, bounds.y, "┏" + bar + "┓", sgr)
+    mut y := 1
+    until y < h:
+        buf.put_str(bounds.x, bounds.y + y, "┃", sgr)
+        buf.put_str(bounds.x + w, bounds.y + y, "┃", sgr)
+        y = y + 1
     end
-    if avail >= 43:
-        ret _HINTS_NO_P
-    end
-    if avail >= 33:
-        ret _HINTS_NO_P_SLASH
-    end
-    if avail >= 25:
-        ret _HINTS_NO_P_SLASH_N
-    end
-    ret _HINTS_MIN
+    buf.put_str(bounds.x, bounds.y + h, "┗" + bar + "┛", sgr)
 end
 
-// Fits text in `width` cells by dropping characters from its left edge and
-// marking the cut with an ellipsis.
-func _elide(text: str, width: int): str:
-    if width >= term.Width(text):
-        ret text
+// The hint line for `max` cells: full labels, then short labels, then the
+// short set with p, /, n, : dropped in that order, each drop marked by ` …`.
+// When even the shortest does not fit, the shortest is returned unchanged:
+// the caller sees the overflow and a silent clip never reaches the screen.
+func _fitHints(max: int): str:
+    if CellWidth(_HINTS_FULL) <= max:
+        ret _HINTS_FULL
     end
-    if width <= 1:
-        ret ""
+    if CellWidth(_HINTS_SHORT) <= max:
+        ret _HINTS_SHORT
     end
-    ret "…" + str.CharSubstr(text, term.Width(text) - width + 1, width - 1)
+    if CellWidth(_HINTS_NO_P) + 2 <= max:
+        ret _HINTS_NO_P + " …"
+    end
+    if CellWidth(_HINTS_NO_P_SLASH) + 2 <= max:
+        ret _HINTS_NO_P_SLASH + " …"
+    end
+    if CellWidth(_HINTS_NO_P_SLASH_N) + 2 <= max:
+        ret _HINTS_NO_P_SLASH_N + " …"
+    end
+    ret _HINTS_MIN + " …"
+end
+
+// The footer ladder: (gap 1, status word), (gap 0, status word), (gap 0,
+// glyph). The first row whose keys slot fits a hint line wins; the third is
+// the shortest legal layout at the 40 × 12 floor.
+func _footerCase(width: int): int:
+    repeat 3 in i:
+        mut status := 11
+        if i == 2:
+            status = 3
+        end
+        mut gap := 1
+        if i > 0:
+            gap = 0
+        end
+        keys_w := width - 10 - gap - (1 + status + gap)
+        if CellWidth(_fitHints(keys_w - 2)) <= keys_w - 2:
+            ret i
+        end
+    end
+    ret 2
 end
 
 @en "NewShell"
-/// Builds the headless shell: one Screen over the Column/Row/Stack tree, the
+/// Builds the headless shell: one Screen over the header/body/footer tree, the
 /// four focus stops in ring order, and no terminal. Nothing touches the
-/// terminal, so this is what tests and STAGE-02 use.
+/// terminal, so this is what tests use.
 pub func NewShell(width: int, height: int): Shell:
     // Each widget is boxed exactly once, as a `dyn Widget`, and that one value
     // goes to both the container and the screen registry. Boxing a plain
@@ -294,15 +418,15 @@ pub func NewShell(width: int, height: int): Shell:
     mut header := basalam.NewRow()
     header.set_padding(basalam.NewInsets(0, 2, 0, 2))
     header.set_gap(2)
-    mut stack := basalam.NewStack()
+    mut body := basalam.NewColumn()
     mut footer := basalam.NewRow()
     footer.set_padding(basalam.NewInsets(0, 1, 0, 1))
-    footer.set_gap(1)
     mut root := basalam.NewColumn()
 
     wordmark := Segment { slot = Slot.Wordmark, style = basalam.Style { fg = basalam.BrightWhite, bold = true } } as dyn basalam.Widget
     context := Segment { slot = Slot.Context, align = basalam.Alignment.Right } as dyn basalam.Widget
-    body := Frame { title = "‹body›" } as dyn basalam.Widget
+    playlist := Frame { title = "playlist" } as dyn basalam.Widget
+    nowplaying := Frame { title = "now playing", focus = false } as dyn basalam.Widget
     status := Segment {
         slot = Slot.Status, head = _STATUS_HEAD, head_style = basalam.Style { fg = basalam.Green },
         inset = 1, focus = true,
@@ -314,44 +438,47 @@ pub func NewShell(width: int, height: int): Shell:
     _ := header.add(wordmark)
     _ := header.add(context)
     header.set_width(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 15 })
-    _ := stack.add(body)
+    _ := body.add(playlist)
+    _ := body.add(nowplaying)
+    body.set_height(1, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 5 })
     _ := footer.add(status)
     _ := footer.add(keys)
     _ := footer.add(mode)
     footer.set_width(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 11 })
-    footer.set_width(2, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 9 })
+    footer.set_width(1, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 16 })
+    footer.set_width(2, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = _MODE_WIDTH })
 
     header_box := header as dyn basalam.Widget
-    stack_box := stack as dyn basalam.Widget
+    body_box := body as dyn basalam.Widget
     footer_box := footer as dyn basalam.Widget
     _ := root.add(header_box)
-    _ := root.add(stack_box)
+    _ := root.add(body_box)
     _ := root.add(footer_box)
     root.set_height(0, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 1 })
     root.set_height(2, basalam.LayoutSize { kind = basalam.SizeKind.Fixed, cells = 1 })
 
     mut screen := basalam.NewScreen(root as dyn basalam.Widget, width, height)
-    header_id := screen.add(basalam.RootId, header_box)
-    _ := screen.add(header_id, wordmark)
-    _ := screen.add(header_id, context)
-    stack_id := screen.add(basalam.RootId, stack_box)
-    body_id := screen.add(stack_id, body)
-    footer_id := screen.add(basalam.RootId, footer_box)
-    status_id := screen.add(footer_id, status)
-    keys_id := screen.add(footer_id, keys)
-    mode_id := screen.add(footer_id, mode)
-    _ := screen.add(basalam.RootId, degrade)
-    degrade.set_bounds(basalam.Rect { width = width, height = height })
+    _ := screen.add(RootId, header_box)
+    _ := screen.add(HeaderId, wordmark)
+    _ := screen.add(HeaderId, context)
+    _ := screen.add(RootId, body_box)
+    _ := screen.add(BodyId, playlist)
+    _ := screen.add(BodyId, nowplaying)
+    _ := screen.add(RootId, footer_box)
+    _ := screen.add(FooterId, status)
+    _ := screen.add(FooterId, keys)
+    _ := screen.add(FooterId, mode)
+    _ := screen.add(RootId, degrade)
 
-    ret Shell {
-        screen = screen, degrade = degrade, body_id = body_id, status_id = status_id, keys_id = keys_id,
-        mode_id = mode_id, width = width, height = height,
-    }
+    mut sh := Shell { screen = screen, width = width, height = height }
+    // The same path a resize takes, so construction and resize agree.
+    sh.Resize(width, height)
+    ret sh
 end
 
 @en "NewTerminalShell"
-/// Builds the shell at the current terminal's size; `main.salam` calls this in
-/// STAGE-02. Uses NewShell, so the tree is the same tree the tests exercise.
+/// Builds the shell at the current terminal's size. Uses NewShell, so the tree
+/// is the same tree the tests exercise.
 pub func NewTerminalShell(): Shell:
     size := term.Size()
     ret NewShell(size.cols, size.rows)
