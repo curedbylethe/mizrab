@@ -38,6 +38,17 @@ pub const TickMs := 100
 // time, which is what makes a package-level list safe.
 mut pending := Vector {} as Vector<Command>
 
+// Parsed command-line verbs waiting for the app's sink. Same lifetime rule as
+// `pending`; the prompt pushes here and `_drain` runs each one after the
+// command list, so `:search` sees its own SearchAccepted first.
+mut pendingVerbs := Vector {} as Vector<Verb>
+
+// The app's verb sink, installed before Run. A Verb carries no player type, so
+// the interface layer can hand one over without naming the player.
+mut _verbSink := (verb: Verb):
+    _ := verb
+end
+
 // The map the loop installs: Vim plus `q`, which is the application's alone.
 // Esc stays unbound here: the preset uses it for pop_focus and CUR-508 owns it.
 func _keymap(): basalam.Keymap:
@@ -64,6 +75,24 @@ func _drain(onCommand: func (Command)):
         i = i + 1
     end
     pending.clear()
+    // The parsed commands come after the keymap's verbs. Parse owns the
+    // argument, so it is freed once the sink has returned.
+    mut j := 0
+    until j < pendingVerbs.len():
+        verb := pendingVerbs.get(j)
+        _verbSink(verb)
+        _freeStr(verb.arg)
+        j = j + 1
+    end
+    pendingVerbs.clear()
+end
+
+@en "SetVerbSink"
+/// Installs the function `_drain` calls for each parsed command-line verb, on
+/// the loop thread, after every command the keymap reported. `ui.Run` does not
+/// take it, so its signature stays stable; main installs it once before Run.
+pub func SetVerbSink(f: func (Verb)):
+    _verbSink = f
 end
 
 @en "Run"
@@ -92,7 +121,18 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
             onTick()
             sh.screen.dirty = true
         end
+        wasCommand := CurrentMode() == Mode.Command
         consumed := sh.screen.dispatch(ev)
+        // A normal-mode key dismisses the command error line. Before _drain,
+        // so the verb that same key submits can set the next one.
+        if consumed and CurrentMode() == Mode.Normal:
+            ClearError()
+        end
+        // The completion popup paints outside the prompt's one-row bounds, so
+        // command mode needs a whole frame to clear it again.
+        if ev.kind == basalam.KeyEvent and (wasCommand or CurrentMode() == Mode.Command):
+            sh.screen.dirty = true
+        end
         // A key that changed a view mutates package state, not the screen, so
         // the loop requests the repaint the widget could not.
         if ViewChanged():

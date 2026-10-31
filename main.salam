@@ -152,8 +152,12 @@ func runShell(): int:
     _ := ui.LibraryLoad(config.IndexFile(paths))
     SyncQueue()
     pushPlayback()
+    // The parsed commands are executed on the loop thread, where the player's
+    // unsynchronised state already lives. Installed before Run so the first
+    // `:play` can never arrive without a sink.
+    ui.SetVerbSink((verb: ui.Verb): runVerb(verb, shell) end)
     ui.Run(
-        flagPath, shell, (command: ui.Command): onCommand(command) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) pushPlayback() end,
+        flagPath, shell, (command: ui.Command): onCommand(command, shell) end, (): player.Tick(time.MonoMillis()) ui.SetPlaying(player.CurrentPath()) pushPlayback() end,
     )
     ret 0
 end
@@ -192,9 +196,12 @@ end
 // The command handler: the only place in this file that touches the player.
 // The four focus moves never reach it (the keymap preset performs them);
 // OpenSearch and OpenCommandLine are ui-internal and are consumed by the loop.
-// SearchAccepted reseeds the queue from the rows the new filter keeps.
-func onCommand(command: ui.Command):
-    if command == ui.Command.PlayPause:
+// SearchAccepted reseeds the queue from the rows the new filter keeps, and
+// Quit — reported by stage 07's key, never by `:q` — stops the screen.
+func onCommand(command: ui.Command, shell &: ui.Shell):
+    if command == ui.Command.Quit:
+        shell.screen.stop()
+    else command == ui.Command.PlayPause:
         _ := player.Toggle()
     else command == ui.Command.Next:
         _ := player.Next()
@@ -203,14 +210,70 @@ func onCommand(command: ui.Command):
     else command == ui.Command.SearchAccepted:
         SyncQueue()
     else command == ui.Command.PlaySelected:
-        path := ui.LibrarySelectedPath()
-        if path != "":
-            if path == player.CurrentPath() and player.CurrentState() == player.State.Playing:
-                _ := player.Toggle()
-            else:
-                _ := player.Play(path)
-                _ := player.QueueSetIndex(ui.LibraryCursor())
-            end
+        PlaySelected()
+    end
+end
+
+// The selected-row play path, shared by Enter on the playlist and `:play` with
+// no argument: replaying the playing track toggles, anything else starts it and
+// makes its queue position current.
+func PlaySelected():
+    path := ui.LibrarySelectedPath()
+    if path == "":
+        ret
+    end
+    if path == player.CurrentPath() and player.CurrentState() == player.State.Playing:
+        _ := player.Toggle()
+        ret
+    end
+    _ := player.Play(path)
+    _ := player.QueueSetIndex(ui.LibraryCursor())
+end
+
+// Executes one parsed command-line verb. Called from the loop's drain, so player
+// state is not shared; every controller rejection becomes the footer error line
+// with the controller's own text. `verb.arg` is owned by the caller and freed
+// once this returns, so nothing here may keep it.
+func runVerb(verb: ui.Verb, shell &: ui.Shell):
+    if verb.name == "play":
+        if verb.arg == "":
+            PlaySelected()
+            ret
         end
+        row := ui.LibraryRowByPath(verb.arg)
+        if row.path == "":
+            ui.SetError("unknown track")
+            ret
+        end
+        if not player.Play(row.path):
+            ui.SetError(player.LastErrorText())
+            ret
+        end
+        _ := player.QueueSetIndex(ui.LibraryCursor())
+    else verb.name == "pause":
+        if not player.Pause():
+            ui.SetError(player.LastErrorText())
+        end
+    else verb.name == "next":
+        if not player.Next():
+            ui.SetError(player.LastErrorText())
+        end
+    else verb.name == "prev":
+        if not player.Prev():
+            ui.SetError(player.LastErrorText())
+        end
+    else verb.name == "seek":
+        if not player.Seek(conv.ParseInt(verb.arg)):
+            ui.SetError(player.LastErrorText())
+        end
+    else verb.name == "volume":
+        if not player.SetVolume(conv.ParseInt(verb.arg) as int):
+            ui.SetError(player.LastErrorText())
+        end
+    else verb.name == "search":
+        ui.LibraryFilter(verb.arg)
+        SyncQueue()
+    else verb.name == "quit":
+        shell.screen.stop()
     end
 end

@@ -1,0 +1,393 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers stage 06: the command grammar, the completion table, and the prompt's
+// command mode headless — the popup geometry and rows, Down/Tab applying the
+// second match, Enter submitting the typed text, the error line in the keys
+// slot at 100 × 30 (long form) and 40 × 12 (short form), the playlist key that
+// dismisses it, and Esc closing the popup without submitting. start() is never
+// called, so the golden stays byte-exact.
+
+import str
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+// Verbs the loop handed to the app's sink. A package global because a lambda
+// captures by value; the arg is cloned because the drain frees its own copy.
+mut verbs := Vector {} as Vector<ui.Verb>
+
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+func recordVerb(verb: ui.Verb):
+    verbs.push(ui.Verb { name = verb.name, arg = str.Clone(verb.arg) })
+end
+
+func track(path: str, title: str, artist: str, album: str): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, tagged = true, format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+func four(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue"))
+    v.push(track("/m/b.flac", "Nina", "Nina Hagen", "Nacht"))
+    v.push(track("/m/c.flac", "So What", "Miles Davis", "Quiet"))
+    v.push(track("/m/d.flac", "Freddie Freeloader", "Miles Davis", "Quiet"))
+    ret indexOf(v)
+end
+
+func slice(y: int, x: int, n: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, n)
+end
+
+// Every verb parses with its name and argument; q and quit both give quit; a
+// play path is kept verbatim, spaces and all.
+func test_every_verb():
+    mut p := ui.Parse("play")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "play")
+    testing.AssertEqStr(p.verb.arg, "")
+
+    p = ui.Parse("play /x/y.mp3")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "play")
+    testing.AssertEqStr(p.verb.arg, "/x/y.mp3")
+
+    p = ui.Parse("play /m/one two.flac")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.arg, "/m/one two.flac")
+
+    p = ui.Parse("pause")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "pause")
+
+    p = ui.Parse("next")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "next")
+
+    p = ui.Parse("prev")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "prev")
+
+    p = ui.Parse("search neo")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "search")
+    testing.AssertEqStr(p.verb.arg, "neo")
+
+    p = ui.Parse("seek 90")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "seek")
+    testing.AssertEqStr(p.verb.arg, "90")
+
+    p = ui.Parse("volume 40")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "volume")
+    testing.AssertEqStr(p.verb.arg, "40")
+
+    p = ui.Parse("q")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "quit")
+
+    p = ui.Parse("quit")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.name, "quit")
+
+    // Surrounding space is trimmed, the argument keeps its inner spacing.
+    p = ui.Parse("  play   x y  ")
+    testing.AssertTrue(p.ok)
+    testing.AssertEqStr(p.verb.arg, "x y")
+end
+
+// The pauses and refusals: an empty prompt is silent, a bad number names what
+// it wants, a wrong arity names the verb, anything else is unknown.
+func test_errors():
+    mut p := ui.Parse("")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "")
+
+    p = ui.Parse("   ")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "")
+
+    p = ui.Parse("-1")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "unknown command")
+
+    p = ui.Parse("seek")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "seek needs a number of seconds")
+
+    p = ui.Parse("seek -1")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "seek needs a number of seconds")
+
+    p = ui.Parse("seek abc")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "seek needs a number of seconds")
+
+    p = ui.Parse("seek 9a")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "seek needs a number of seconds")
+
+    p = ui.Parse("volume")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "volume must be 0 to 100")
+
+    p = ui.Parse("volume 101")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "volume must be 0 to 100")
+
+    p = ui.Parse("volume x")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "volume must be 0 to 100")
+
+    p = ui.Parse("next 1")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "next takes no arguments")
+
+    p = ui.Parse("quit now")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "quit takes no arguments")
+
+    p = ui.Parse("search")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "search needs text")
+
+    p = ui.Parse("frobnicate")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "unknown command")
+
+    p = ui.Parse("PLAY")
+    testing.AssertFalse(p.ok)
+    testing.AssertEqStr(p.error, "unknown command")
+end
+
+// The completion table: prefix in display order, argument takers after a space,
+// all eight for an empty prompt, and Tab's row already spaced for the next word.
+func test_completions():
+    se := ui.Completions("se")
+    testing.AssertEqInt(se.len(), 2)
+    testing.AssertEqStr(se.get(0), "search ")
+    testing.AssertEqStr(se.get(1), "seek ")
+    se.free()
+
+    p := ui.Completions("p")
+    testing.AssertEqInt(p.len(), 3)
+    testing.AssertEqStr(p.get(0), "pause")
+    testing.AssertEqStr(p.get(1), "play")
+    testing.AssertEqStr(p.get(2), "prev")
+    p.free()
+
+    play := ui.Completions("play ")
+    testing.AssertEqInt(play.len(), 3)
+    testing.AssertEqStr(play.get(0), "search ")
+    testing.AssertEqStr(play.get(1), "seek ")
+    testing.AssertEqStr(play.get(2), "volume ")
+    play.free()
+
+    all := ui.Completions("")
+    testing.AssertEqInt(all.len(), 8)
+    testing.AssertEqStr(all.get(0), "next")
+    testing.AssertEqStr(all.get(7), "volume ")
+    all.free()
+
+    testing.AssertEqStr(ui.Complete("se", 0), "search ")
+    testing.AssertEqStr(ui.Complete("se", 1), "seek ")
+    testing.AssertEqStr(ui.Complete("p", 2), "prev")
+    testing.AssertEqStr(ui.Complete("zz", 0), "")
+end
+
+// Typing `se` draws two popup rows, the title and the first row marked; Down
+// then Tab applies the second match; the typed `seek 90` is what Enter submits.
+func test_popup_and_submit():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    _ := shell.screen.dispatch(key("s"))
+    _ := shell.screen.dispatch(key("e"))
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    // Keys slot x 13; popup x 12, w 13, h 4, y 24.
+    testing.AssertEqStr(slice(24, 12, 13, shell.screen.buffer), "┌ 2 matches ┐")
+    testing.AssertEqStr(slice(25, 13, 9, shell.screen.buffer), "> search ")
+    testing.AssertEqStr(slice(26, 13, 7, shell.screen.buffer), "  seek ")
+
+    _ := shell.screen.dispatch(key("\x1b[B"))
+    _ := shell.screen.dispatch(key("\t"))
+    testing.AssertEqStr(ui.PromptText(), "seek ")
+    shell.screen.dirty = true
+    shell.screen.draw()
+    // `seek ` is a space-bearing text: the three argument takers, renumbered.
+    testing.AssertEqStr(slice(23, 12, 13, shell.screen.buffer), "┌ 3 matches ┐")
+    testing.AssertEqStr(slice(24, 13, 9, shell.screen.buffer), "> search ")
+
+    _ := shell.screen.dispatch(key("9"))
+    _ := shell.screen.dispatch(key("0"))
+    _ := shell.screen.dispatch(key("\r"))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+
+    // The verb is on the loop's queue; one headless run drains it to the sink.
+    verbs.clear()
+    mut drain := ui.NewShell(80, 24)
+    defer drain.Close()
+    _ := drain.screen.post(key("q"))
+    ui.Run("", drain, (command: ui.Command): end, (): end)
+    testing.AssertEqInt(verbs.len(), 1)
+    testing.AssertEqStr(verbs.get(0).name, "seek")
+    testing.AssertEqStr(verbs.get(0).arg, "90")
+end
+
+// An unknown verb becomes the long error line in the keys slot, and the next
+// playlist key both works again and dismisses it.
+func test_unknown_error_line():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    mut i := 0
+    until i < str.CharCount("frobnicate"):
+        _ := shell.screen.dispatch(key(str.CharAtIndex("frobnicate", i)))
+        i = i + 1
+    end
+    _ := shell.screen.dispatch(key("\r"))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    row := shell.screen.buffer.row_text(29)
+    testing.AssertTrue(str.Contains(row, ":frobnicate  unknown command  · try  :help"))
+    testing.AssertFalse(str.Contains(row, "space play"))
+
+    // `j` still moves the cursor, and the loop clears the line on the way. Run
+    // closes its screen, so the cleared row is checked on a fresh one.
+    _ := ui.LibrarySetCursor(0)
+    mut live := ui.NewShell(100, 30)
+    _ := live.screen.post(key("j"))
+    _ := live.screen.post(key("q"))
+    ui.Run("", live, (command: ui.Command): end, (): end)
+    testing.AssertEqInt(ui.LibraryCursor(), 1)
+
+    mut after := ui.NewShell(100, 30)
+    defer after.Close()
+    after.screen.dirty = true
+    after.screen.draw()
+    testing.AssertFalse(str.Contains(after.screen.buffer.row_text(29), "unknown command"))
+    testing.AssertTrue(str.Contains(after.screen.buffer.row_text(29), "space play/pause"))
+end
+
+// At 40 × 12 the keys slot is 26 cells, under the 28 the long form needs, so
+// the error is the short form, starting at x 4.
+func test_error_short():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    mut i := 0
+    until i < str.CharCount("frobnicate"):
+        _ := shell.screen.dispatch(key(str.CharAtIndex("frobnicate", i)))
+        i = i + 1
+    end
+    _ := shell.screen.dispatch(key("\r"))
+    ui.ApplyFocus(shell.screen)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(11, 4, 23, shell.screen.buffer), "unknown command · :help")
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(11), ":frobnicate"))
+end
+
+// A controller rejection keeps the controller's text verbatim, in the same
+// positions as the parse error.
+func test_controller_error_text():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    ui.SetError("command not allowed in state paused")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(29), "command not allowed in state paused  · try  :help"))
+    ui.ClearError()
+end
+
+// Esc with the popup open closes the prompt, draws no error and queues nothing.
+func test_escape_closes_popup():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    _ := shell.screen.dispatch(key("s"))
+    _ := shell.screen.dispatch(key("e"))
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(24), "2 matches"))
+
+    _ := shell.screen.dispatch(key("\x1b"))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+
+    verbs.clear()
+    mut drain := ui.NewShell(80, 24)
+    defer drain.Close()
+    _ := drain.screen.post(key("q"))
+    ui.Run("", drain, (command: ui.Command): end, (): end)
+    testing.AssertEqInt(verbs.len(), 0)
+    testing.AssertEqStr(ui.PromptText(), "se")
+end
+
+func main(): int:
+    ui.SetVerbSink((verb: ui.Verb): recordVerb(verb) end)
+    test_every_verb()
+    test_errors()
+    test_completions()
+    test_popup_and_submit()
+    test_unknown_error_line()
+    test_error_short()
+    test_controller_error_text()
+    test_escape_closes_popup()
+    ret testing.Summary()
+end
