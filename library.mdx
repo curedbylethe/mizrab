@@ -9,7 +9,7 @@ keywords:
   - "unicode"
 ---
 
-The library is what mizrab knows about the music on disk. It lives in `library/` as the Salam package `library` and produces one thing: a versioned JSON index of every audio file under the roots you scan, with the tags read from each file's head. Nothing reads the index yet. The screens that will (playlist, search, now playing) arrive later, so today the only consumer is `mizrab --scan`, which builds the index headless. The scanner does not play, decode, watch the filesystem or look up metadata online.
+The library is what mizrab knows about the music on disk. It lives in `library/` as the Salam package `library` and produces one thing: a versioned JSON index of every audio file under the roots you scan, with the tags read from each file's head. The playlist reads that index at start, and `mizrab --scan` builds it headless. The scanner does not play, decode, watch the filesystem or look up metadata online.
 
 ## What a scan does
 
@@ -29,7 +29,7 @@ A rescan is incremental. A file whose path, size and modification time all match
 
 The index is a cache of filesystem state: it is always safe to delete, and a rescan rebuilds it.
 
-- **Path.** `config.IndexFile`'s answer: `<data>/mizrab/index.json`, where `<data>` is `XDG_DATA_HOME` when set and absolute, else `~/.local/share`. `--index FILE` or `library.index` overrides it; the [configuration](/configuration) page covers the precedence. The data directory is deliberate: playlists will refer to track IDs, so a cache cleaner should not be able to delete the index.
+- **Path.** `config.IndexFile`'s answer: `<data>/mizrab/index.json`, where `<data>` is `XDG_DATA_HOME` when set and absolute, else `~/.local/share`. `--index FILE` or `library.index` overrides it; the [configuration](/configuration) page covers the precedence. The data directory is deliberate: the playlist reads it at start, and playlists on disk will refer to its track IDs, so a cache cleaner should not be able to delete the index.
 - **Format.** JSON, two-space indented, with `"schema": 1` first and the tracks after it, sorted by path. Each track's keys are the `Track` field names below, in that order. There are no timestamps, so scanning an unchanged tree twice writes the same bytes.
 - **Atomic write.** The scan writes `index.json.tmp` and renames it over `index.json`, so a crash of the process never leaves a half-written index. Missing parent directories are created.
 - **Recovery.** A file is discarded, and an empty index used in its place, when it is missing, cannot be read, is truncated (its length differs from its size on disk), declares a schema other than `1`, or does not decode strictly (an unknown key, a missing field, a wrong type or trailing data). The next scan then reads every file.

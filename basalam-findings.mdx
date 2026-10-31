@@ -1,0 +1,122 @@
+---
+title: "basalam findings"
+description: "The log of basalam and standard-library limitations hit while building mizrab's interface, each with a minimal reproduction, the workaround used and what to re-check after a bump."
+keywords:
+  - "basalam"
+  - "findings"
+  - "limitations"
+  - "upstream"
+  - "workaround"
+---
+
+This page is the log for limitations hit while building the interface: seven entries against the pinned `basalam v0.3.3` and Salam 0.5.9, written in the four fields of the [upstream findings](/contributing#upstream-findings) convention. Each entry carries field 3 (minimal reproduction) and field 4 (expected vs actual, with the workaround), names the `file:line` where the limitation lives, and says what to re-check after a bump. Fields 1 and 2 are the same for all seven and are recorded once below.
+
+## Versions and host
+
+**1. `salam version`.**
+
+```text
+salam 0.5.9
+commit:  d5e0c093c7e0d978bc5eae404fdeed4755d581d9
+date:    2026-10-23T21:52:27+02:00
+built:   Oct 23 2026 20:24:56 UTC
+origin:  official release build (v0.5.9)
+os:      mac
+arch:    arm64
+cpus:    8
+threads: 8
+memory:  8.0 GiB
+```
+
+**2. OS and terminal.** macOS 27.0.1 (build 26A434), arm64, `$TERM=xterm-256color`, under a pty from `script -q /dev/null`.
+
+basalam comes from Salam's registry at `v0.3.3`, commit `d06fcc0e519d5524a14badfb500375ac7e367f6b`, pinned in `salam.lock`. Nothing here is filed upstream yet.
+
+## Screen.add boxes a copy
+
+`Screen.add` takes a `dyn Widget`, and a value boxed into an interface cannot be downcast again. A widget reached through `screen.widget(id)` is a different value from the struct the caller still holds, so a setter called after `add` writes the caller's copy and the screen keeps painting the old one.
+
+**3. Minimal reproduction.** Add a typed widget, call one of its setters on the local value, then draw:
+
+```sh
+# a screen with a Text added by value; set_text after add, then present()
+# the cells never change
+```
+
+**4. Expected vs actual.** Expected: a widget that is in the tree and also held by the caller is one object, so `set_text` after `add` changes what the next frame paints, as retained-mode widgets usually do. Actual: the tree holds the boxed copy; the setter writes the caller's struct; the frame is unchanged. `basalam/screen.salam:262`.
+
+Workaround: one package-level state owner plus render-only widgets. The playlist, the now-playing panel, the status segment and the prompt read package state at render time and keep no drawable field. A delegate that must stay editable is never added to the screen: the prompt's `basalam.Input` is created once and driven by the registered `Prompt` widget, so the caret and the tail window stay basalam's while submit and `Esc` stay mizrab's (`ui/mode.salam`).
+
+Blocks: yes, by design. **Re-check after a bump**: whether `add` stores a reference rather than a copy, or whether a downcast or a mutable accessor for a registered widget exists.
+
+## List cannot be driven programmatically
+
+`List` has no selection setter, no item setter, no offset getter, no scroll indicator and no ellipsis, and only `j`/`k` move it. Its `items`, `selected` and `window_start` fields are private (`basalam/list.salam:60-243`), so nothing outside the package can move the cursor or read where the window starts.
+
+**3. Minimal reproduction.** Build a `NewList` with three rows, add it to a screen, call `selected_index()`, move the selection through a key event, call it again.
+
+**4. Expected vs actual.** Expected: a list a host can drive, with a selection setter and an offset so a search can keep the cursor on a row. Actual: `selected_index()` returns the add-time value and there is no call that changes it except `handle_event`; the window start is only revealed internally on `j`/`k`. There is no ellipsis: rows are cut with `str.CharSubstr`, and no scrollbar is drawn.
+
+Workaround: the playlist is an app-owned widget (`ui/playlist.salam`) over the library view in `ui/library_view.salam`: the cursor, the window, the scroll thumb, the position line and `Truncate`'s `…` marker are all mizrab's.
+
+Blocks: yes — this is the "basalam List" the issue names. **Re-check after a bump**: whether `List` gained a selection setter, an offset getter, an item setter or a scroll indicator.
+
+## Progress cannot draw a filled fraction
+
+`Progress` paints `#` for filled cells and `-` for empty ones, adds a fixed five-cell ` NN%` tail, and has no redraw after `add`: the fill is an integer percentage of a max, not a position over a duration, so it cannot express "3.4 of 4 minutes".
+
+**3. Minimal reproduction.** `NewProgress()`, `set_progress(50)`, add it to a screen and render.
+
+**4. Expected vs actual.** Expected: a widget that draws a filled fraction with sub-cell precision and re-reads its value on the next frame. Actual: `#`/`-` only, a `%` tail that cannot be turned off, and the value set through the boxed copy is frozen at the add-time value (`basalam/progress.salam:110`).
+
+Workaround: the now-playing bar is drawn by hand in `ui/now_playing.salam`: `█` for whole cells, one eighth-block of `▏▎▍▌▋▊▉` for the fraction and `─` for the rest, all in integer arithmetic, from the position and duration pushed each tick.
+
+Blocks: no. **Re-check after a bump**: whether `Progress` accepts a fraction, whether the percentage tail can be disabled, and whether a setter after `add` is seen by the next frame.
+
+## Input has no submit
+
+`Input` edits text and nothing else: no submit callback, no change callback, no completion, no prompt prefix, and `Enter` is consumed without a state change, so the host cannot learn that it was pressed.
+
+**3. Minimal reproduction.** Add an `Input`, handle `term.KeyEnter` and look for a callback or a state change.
+
+**4. Expected vs actual.** Expected: `Enter` either calls a submit hook or reports the key as unconsumed, and a change hook fires on typing. Actual: `Enter` returns true and does nothing (`basalam/input.salam:121`), so a registered input would swallow the submit silently; completion and a prompt label are not modelled.
+
+Workaround: the `Input` is never added to the screen. `Prompt` (`ui/mode.salam`) owns it, renders it inside its own bounds, forwards typing to it, and handles `Enter` and `Esc` itself before basalam sees them; the leading `/` or `:` label and the completion popup are mizrab's.
+
+Blocks: no. **Re-check after a bump**: whether `Input` gained `on_submit`/`on_change`, whether `Enter` is reported, and whether a prefix or placeholder label is part of the widget.
+
+## One codepoint is one cell
+
+`term.Width` counts one cell per codepoint. `term.Width("界") == 1` while the terminal paints it in two, so every width computation in the interface — the hint ladder, the truncation budget, the now-playing block — is a codepoint count, not a column count. There is no public ellipsis helper, and the wide-aware helpers that do exist are private to two widgets: `table.salam` and `separator.salam:193`.
+
+**3. Minimal reproduction.** Render `界界` in a 2-cell box and observe the overflow; `tests/unicode_test.salam:82-87` records the same error through `term.Truncate`, where four `界` cut to 3 codepoints occupy 6 columns.
+
+**4. Expected vs actual.** Expected: a width function that answers the columns the terminal will use, and a truncation helper that respects it. Actual: `term.Width` and `term.Truncate` are codepoint-exact and column-wrong for CJK, combining marks and emoji; the table's `_cell_width` and the separator's `_cell_width` are `func`, not `pub func`, so a third widget cannot reuse them.
+
+Workaround: `ui/text.salam` wraps the codepoint count as `CellWidth`, cuts with `Truncate` (a `…` marker) and keeps path tails with `TruncatePath` (`…/`). The panel, the columns and the footer all go through it, so every cut shows a marker instead of a silent clip; the width stays wrong for CJK, and that is recorded, not hidden.
+
+Blocks: no — documented. **Re-check after a bump**: whether `term.Width` gained an East Asian width table, and whether an ellipsis or a wide-aware width helper became public.
+
+## There is no BorderStyle.Heavy
+
+`BorderStyle` is `None`, `Single`, `Double` and `Rounded` (`basalam/style.salam:107`). The artifact's focused panel draws `┏ ━ ┓ ┃ ┗ ┛`, which is none of the four, so a focused panel cannot use the library's border renderer.
+
+**3. Minimal reproduction.** Set a `Panel`'s border to any `BorderStyle` and render it focused: it draws light, double or rounded lines, never heavy.
+
+**4. Expected vs actual.** Expected: a `Heavy` member, or a border style that takes the glyph set. Actual: the enum is closed at four members and `DrawBorder` switches on it (`basalam/border.salam:35`), so the heavy ring has to be drawn cell by cell.
+
+Workaround: `_draw_heavy` in `ui/shell.salam` writes the ring and the title run itself, and the playlist calls it when it holds the focus.
+
+Blocks: no. **Re-check after a bump**: whether `BorderStyle` gained `Heavy`, or whether `DrawBorder` takes a glyph set.
+
+## str.Lower folds ASCII only
+
+`str.Lower` is the builtin `s.lower()`, and the pinned builtin folds A–Z only, although `unicode.ToFold` sits beside it in the standard library. `str.Lower("ÜBER")` is `Über`, not `über`.
+
+**3. Minimal reproduction.** Compare `str.Lower("ÜBER")` with `"über"` in a test; the pinned builtin folds ASCII, so the comparison fails (`std/str/case.salam:37`).
+
+**4. Expected vs actual.** Expected: a case-insensitive search finds `Über` when you type `über`, the way `unicode.ToFold` would. Actual: `Lower` leaves `Ü` alone, so a folded haystack and a folded needle disagree on every non-ASCII letter. `unicode.ToFold` exists at `std/unicode/unicode.salam:248` but nothing routes `Lower` through it.
+
+Workaround: `_fold` in `ui/library_view.salam` folds a copy one codepoint at a time through `str.CodePoints` and `unicode.ToFold`. The search compares folded text, so `Über` matches `über`. A full fold such as `ß` → `ss` still does not match: one codepoint in, one out (`shortcut:` comment in the same file).
+
+Blocks: no. **Re-check after a bump**: whether `str.Lower` routes through `unicode.ToFold`, and whether a full case-fold that can change the length exists.
