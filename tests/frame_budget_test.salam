@@ -1,0 +1,172 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The CI half of the frame budget: a headless, structural guard at 200 × 60
+// with the 1,000-row fixture. Three warm frames, then 50 forced full repaints
+// (dirty + draw + ansi, the whole frame serialized) and the median must stay
+// under a ceiling four times the 16 ms budget, so a shared runner cannot flake
+// it. The row assertion is what makes the timing mean anything: the playlist
+// formats its 48-row window at 200 × 60, never the 1,000-track library.
+//
+// The measured loop is the instrument, not a claim: the printed line records
+// what this host took, and tests/frame-measure.sh is where a number worth
+// quoting comes from.
+//
+// One line before testing.Summary(): `frame_budget: <median_us> us median,
+// <max_us> us max`. It goes to stderr, not stdout: the figure is the host's,
+// and a byte-exact golden carrying it would fail make check on every run but
+// the one that recorded it. On stderr it still reaches the CI log, which is
+// what the line is for.
+
+import conv
+import mem
+import sort
+import str
+import testing
+import time
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+// 4 × 16 ms in microseconds: a structural ceiling, never the 16 ms budget.
+const _CEILING_US := 4 * 16000
+
+const _SAMPLES := 50
+
+// The playlist's inner height at 200 × 60: 60 - 2 header/footer - 8 now
+// playing - 2 border (ui/shell.salam Resize, ui/playlist.salam render).
+const _PLAYLIST_VIEW := 48
+
+func track(path: str, title: str, artist: str, album: str, ms: i64): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, durationMs = ms, tagged = true,
+        format = "flac",
+    }
+end
+
+// The 1,000-row fixture: titles 1..1000 with a CJK and a non-ASCII artist
+// mix, and the three duration classes the panel prints differently (-1 and 0
+// both as --:--, a real one as m:ss).
+func thousand(): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < 1000:
+        n := i + 1
+        num := str.FromInt(n as i64)
+        mut title := "track " + num
+        if i % 3 == 0:
+            title = "東京 " + num
+        else i % 5 == 0:
+            title = "Über " + num
+        end
+        mut artist := "Alpha"
+        if i % 4 == 0:
+            artist = "Über Artist"
+        end
+        mut album := "First"
+        if i % 7 == 0:
+            album = "海上"
+        end
+        mut ms := 180000 as i64 + (i as i64) * 1000 as i64
+        if i % 3 == 0:
+            ms = 0 - 1
+        else i % 3 == 1:
+            ms = 0
+        end
+        idx.tracks.push(track("/lib/" + num + ".flac", title, artist, album, ms))
+        i = i + 1
+    end
+    ret idx
+end
+
+// The median of a copy: sorting the samples would destroy the max, and 50
+// values need no smarter sort than the standard one.
+func median(samples: Vector<i64>): i64:
+    mut v := Vector {} as Vector<i64>
+    defer v.free()
+    mut i := 0
+    until i < samples.len():
+        v.push(samples.get(i))
+        i = i + 1
+    end
+    sort.SortBy(v, (a: i64, b: i64): ret a < b end)
+    n := v.len()
+    if n % 2 == 1:
+        ret v.get(n / 2)
+    end
+    ret (v.get(n / 2 - 1) + v.get(n / 2)) / 2
+end
+
+func maxOf(samples: Vector<i64>): i64:
+    mut best := 0 as i64
+    mut i := 0
+    until i < samples.len():
+        if samples.get(i) > best:
+            best = samples.get(i)
+        end
+        i = i + 1
+    end
+    ret best
+end
+
+// One full frame: the dirty flag forces the repaint, draw() paints the back
+// buffer, ansi() serializes the whole 200 × 60 grid (the string is freed, so
+// the loop leaks nothing).
+func frame(sh &: ui.Shell):
+    sh.screen.dirty = true
+    sh.screen.draw()
+    out := sh.screen.buffer.ansi()
+    mem.Free(out as void*)
+end
+
+func test_frame_budget():
+    loaded := ui.LibraryLoadIndex(thousand())
+    testing.AssertEqInt(loaded, 1000)
+    _ := ui.LibrarySetCursor(500)
+    ui.SetPlaying("/lib/501.flac")
+    mut shell := ui.NewShell(200, 60)
+    defer shell.Close()
+
+    repeat 3:
+        frame(shell)
+    end
+
+    mut samples := Vector {} as Vector<i64>
+    defer samples.free()
+    repeat _SAMPLES:
+        t0 := time.MonoNanos()
+        shell.screen.dirty = true
+        shell.screen.draw()
+        out := shell.screen.buffer.ansi()
+        t1 := time.MonoNanos()
+        mem.Free(out as void*)
+        samples.push((t1 - t0) / 1000)
+    end
+
+    // The last draw is the one the counter describes: 48 rows formatted, not
+    // 1,000. Without this the timing proves nothing about scaling.
+    testing.AssertEqInt(ui.PlaylistRenderedRows(), _PLAYLIST_VIEW)
+
+    med := median(samples)
+    worst := maxOf(samples)
+    testing.AssertMsg(med < _CEILING_US, "frame_budget: median above the 64 ms ceiling")
+    // stderr: see the file comment; the golden is the summary alone.
+    printerrln "frame_budget: " + conv.FormatInt(med) + " us median, " + conv.FormatInt(worst) + " us max"
+end
+
+func main(): int:
+    test_frame_budget()
+    ret testing.Summary()
+end

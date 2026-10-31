@@ -1,0 +1,138 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The frame instrument, driven by tests/frame-measure.sh.
+// Not a test: the name has no _test suffix, so tests/run.sh never discovers it,
+// and the numbers depend on the machine, so nothing asserts them.
+//
+// One frame here is `dirty = true` + present() on an attached screen: present
+// repaints the whole back buffer (dirty forces the full repaint), diffs it
+// against the front grid and writes the changed cells to the terminal. That is
+// the frame the issue budgets, so it must run under a pty: without one,
+// present() draws and diffs but never writes.
+//
+// Excluded, as tests/shell-measure.sh excludes them: fixture construction, the
+// index load, startup, terminal setup and the terminal emulator's own paint.
+// The shell is resized to 200 × 60 after start(), because start() sizes the
+// buffer to the pty and the budget is stated at 200 × 60.
+//
+// Writes one `us=N` line per measured frame to argv[1], not stdout: the screen
+// is attached, so stdout carries escape sequences.
+
+import io
+import mem
+import os
+import str
+import time
+
+include "../../ui/ui.salam"
+include "../../library/library.salam"
+
+const _RUNS := 12
+
+const _WARMUP := 3
+
+func track(path: str, title: str, artist: str, album: str, ms: i64): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, durationMs = ms, tagged = true,
+        format = "flac",
+    }
+end
+
+// The same 1,000-row fixture the CI test builds: titles 1..1000 with a CJK and
+// a non-ASCII artist mix, and the three duration classes.
+func thousand(): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < 1000:
+        n := i + 1
+        num := str.FromInt(n as i64)
+        mut title := "track " + num
+        if i % 3 == 0:
+            title = "東京 " + num
+        else i % 5 == 0:
+            title = "Über " + num
+        end
+        mut artist := "Alpha"
+        if i % 4 == 0:
+            artist = "Über Artist"
+        end
+        mut album := "First"
+        if i % 7 == 0:
+            album = "海上"
+        end
+        mut ms := 180000 as i64 + (i as i64) * 1000 as i64
+        if i % 3 == 0:
+            ms = 0 - 1
+        else i % 3 == 1:
+            ms = 0
+        end
+        idx.tracks.push(track("/lib/" + num + ".flac", title, artist, album, ms))
+        i = i + 1
+    end
+    ret idx
+end
+
+func frame(sh &: ui.Shell):
+    sh.screen.dirty = true
+    sh.screen.present()
+end
+
+func main():
+    args := os.Args()
+    if args.len() < 2:
+        io.EPrintln("probe_frame: usage: probe_frame <result-file>")
+        ret 2
+    end
+    if not ui.IsTTY():
+        io.EPrintln("probe_frame: stdin is not a terminal; run it under a pty (tests/frame-measure.sh)")
+        ret 2
+    end
+    out := args[1]
+    _ := ui.LibraryLoadIndex(thousand())
+    _ := ui.LibrarySetCursor(500)
+    ui.SetPlaying("/lib/501.flac")
+    mut shell := ui.NewShell(200, 60)
+    ui.Open(shell)
+    // start() sized the buffer to the pty; the budget is stated at 200 × 60.
+    shell.Resize(200, 60)
+    repeat _WARMUP:
+        frame(shell)
+    end
+    mut b := str.NewBuilder()
+    repeat _RUNS:
+        t0 := time.MonoNanos()
+        shell.screen.dirty = true
+        shell.screen.present()
+        t1 := time.MonoNanos()
+        str.BufAppend(b, "us=")
+        str.BufAppendInt(b, (t1 - t0) / 1000)
+        str.BufAppendChar(b, 10)
+    end
+    text := str.BufStr(b)
+    str.BufFree(b)
+    shell.Close()
+    _ := os.WriteFile(out, text)
+    _free(text)
+    ret 0
+end
+
+// The view and the probe's own builder are the only allocations left; both go
+// through mem.Free, as every owned string in the tree does.
+func _free(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
