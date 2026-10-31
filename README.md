@@ -90,7 +90,7 @@ including `make help` and the opt-in `make soak`.
 
 - **[basalam](https://github.com/curedbylethe/basalam)** — a retained-mode
   terminal UI library for Salam. It comes from Salam's package registry at
-  `v0.3.2`, pinned by commit and sha256 in `salam.lock`.
+  `v0.3.3`, pinned by commit and sha256 in `salam.lock`.
 - **[Salam](https://github.com/SalamLang/Salam)** — the language, compiler and
   standard library mizrab is written in.
 

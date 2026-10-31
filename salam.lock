@@ -12,6 +12,6 @@ sum = "sha256:708386ebfe8e23fe2b586603097ce03034df108914dd4749b6b2c1e2df1aa235"
 
 [[package]]
 path = "github.com/curedbylethe/basalam"
-version = "v0.3.2"
-commit = "00402caed2997e0013f06fb7b3dd4393e1d6d3e0"
-sum = "sha256:abc016e9cb1a0f89a77cd812df980cff8e6db8752cf182110703790d2f957fae"
+version = "v0.3.3"
+commit = "d06fcc0e519d5524a14badfb500375ac7e367f6b"
+sum = "sha256:f6c36da904857231d2feb73db48f780e4bd4de0bd1195bbb8a3f48b7258fea4c"
