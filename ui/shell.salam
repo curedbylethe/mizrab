@@ -425,7 +425,7 @@ pub func NewShell(width: int, height: int): Shell:
 
     wordmark := Segment { slot = Slot.Wordmark, style = basalam.Style { fg = basalam.BrightWhite, bold = true } } as dyn basalam.Widget
     context := Segment { slot = Slot.Context, align = basalam.Alignment.Right } as dyn basalam.Widget
-    playlist := Frame { title = "playlist" } as dyn basalam.Widget
+    playlist := Playlist { title = "playlist" } as dyn basalam.Widget
     nowplaying := Frame { title = "now playing", focus = false } as dyn basalam.Widget
     status := Segment {
         slot = Slot.Status, head = _STATUS_HEAD, head_style = basalam.Style { fg = basalam.Green },

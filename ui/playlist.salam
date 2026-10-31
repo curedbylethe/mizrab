@@ -1,0 +1,238 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The playlist panel: the library view's visible rows with a cursor, a playing
+// marker, a track number, the title, an optional album column, the duration,
+// a scroll thumb and the window's position on the bottom border. The widget
+// holds only its title: rows, cursor and playing path are read from the
+// package view at render time, because Screen.add boxes a copy and a cached
+// field could go stale.
+//
+// Only the visible window is formatted: start is the cursor centred, the row
+// loop runs over min(view, n - start) entries, and everything per row is O(1)
+// except Truncate on the text. RenderedRows records that window size so the
+// frame budget test can prove the render never scales with the library.
+
+package ui
+
+import str
+import term
+import "github.com/curedbylethe/basalam/basalam"
+
+// Rows the last render formatted, reset at the top of every render.
+mut _renderedRows := 0
+
+@en "Playlist"
+/// The playlist panel: a framed list of the visible rows with a cursor, the
+/// playing marker, columns and a scroll indicator. Focusable; keys arrive as
+/// keymap bindings rather than through handle_event.
+pub struct Playlist:
+    pub use basalam.BaseWidget
+
+    title: str = "playlist"
+
+    pub func focusable(): bool:
+        ret true
+    end
+
+    pub func handle_event(event: basalam.Event): bool:
+        _ := event
+        ret false
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        _renderedRows = 0
+        if bounds.width <= 0 or bounds.height <= 0:
+            ret
+        end
+        tier := basalam.DetectTier()
+        mut edge := basalam.Style { fg = basalam.BrightBlack }
+        if buf.focused:
+            edge = basalam.Style { fg = basalam.Yellow }
+            _draw_heavy(buf, bounds, edge)
+        else:
+            basalam.DrawBorder(buf, bounds, basalam.BorderStyle.Single, edge, "")
+        end
+        if bounds.width >= 6:
+            run := " " + this.title + " "
+            mut sgr := basalam.StyleSgr(edge, tier)
+            if buf.focused:
+                sgr = sgr + term.Sgr(term.StyleReverse)
+            end
+            buf.put_str(bounds.x + 2, bounds.y, run, sgr)
+        end
+        // Below this the fixed columns cannot coexist; paint the frame only.
+        if bounds.width < 12 or bounds.height < 3:
+            ret
+        end
+
+        x0 := bounds.x + 2
+        top := bounds.y + 1
+        view := bounds.height - 2
+        cw := bounds.width - 4
+        n := LibraryVisibleCount()
+        structure := basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, tier)
+        emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+        playback := basalam.StyleSgr(basalam.Style { fg = basalam.Green }, tier)
+
+        if n == 0:
+            if not _loaded:
+                ret
+            end
+            mut msg := ""
+            if LibraryRows() == 0:
+                msg = "no tracks — run mizrab --scan"
+            else:
+                msg = "no matches"
+            end
+            buf.put_str(x0, top, msg, structure)
+            ret
+        end
+
+        cursor := LibraryCursor()
+        mut start := cursor - view / 2
+        mut maxStart := n - view
+        if maxStart < 0:
+            maxStart = 0
+        end
+        if start < 0:
+            start = 0
+        end
+        if start > maxStart:
+            start = maxStart
+        end
+        mut count := n - start
+        if count > view:
+            count = view
+        end
+        if count < 0:
+            count = 0
+        end
+
+        mut textW := cw - 8 - 2 - 5
+        album := bounds.width >= 140
+        if album:
+            textW = textW - 34
+        end
+        if textW < 0:
+            textW = 0
+        end
+
+        repeat count in r:
+            row := LibraryRowAt(start + r)
+            y := top + r
+            if start + r == cursor:
+                buf.put_str(x0, y, ">", emphasis)
+            end
+            if row.path == _playing:
+                buf.put_str(x0 + 2, y, "▶︎", playback)
+            end
+            num := str.FromInt((start + r + 1) as i64)
+            if CellWidth(num) < 2:
+                buf.put_str(x0 + 5, y, num, structure)
+            else:
+                buf.put_str(x0 + 4, y, num, structure)
+            end
+            _freeStr(num)
+            if textW > 0:
+                text := _rowText(row, bounds.width)
+                _putCelled(buf, x0 + 8, y, text, textW, "")
+            end
+            if album:
+                ax := x0 + 8 + textW + 2
+                if CellWidth(row.album) <= 32:
+                    buf.put_str(ax, y, row.album, structure)
+                else:
+                    cut := Truncate(row.album, 32)
+                    buf.put_str(ax, y, cut, structure)
+                    _freeStr(cut)
+                end
+            end
+            dur := DurationShort(row.durationMs)
+            buf.put_str(x0 + cw - CellWidth(dur), y, dur, structure)
+            if row.durationMs > 0:
+                _freeStr(dur)
+            end
+            _renderedRows = _renderedRows + 1
+        end
+
+        if n > view:
+            mut size := (view * view + n / 2) / n
+            if size < 1:
+                size = 1
+            end
+            if size > view:
+                size = view
+            end
+            mut pos := (start * view + n / 2) / n
+            if pos > view - size:
+                pos = view - size
+            end
+            if pos < 0:
+                pos = 0
+            end
+            repeat size in k:
+                buf.put_str(bounds.x + bounds.width - 2, top + pos + k, "█", structure)
+            end
+            mut b := str.NewBuilder()
+            str.BufAppendInt(b, (start + 1) as i64)
+            str.BufAppendChar(b, 45)
+            str.BufAppendInt(b, (start + count) as i64)
+            str.BufAppend(b, " of ")
+            str.BufAppendInt(b, n as i64)
+            run := str.BufStr(b)
+            str.BufFree(b)
+            buf.put_str(
+                bounds.x + bounds.width - 2 - CellWidth(run), bounds.y + bounds.height - 1, run,
+                structure
+            )
+            _freeStr(run)
+        end
+    end
+end
+
+// The displayed text for one row: artist, an em dash and the title at 60
+// columns or wider, the title alone below. Always owned, so the caller frees it.
+func _rowText(row: Row, width: int): str:
+    if width < 60:
+        ret str.Clone(row.title)
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, row.artist)
+    str.BufAppend(b, " — ")
+    str.BufAppend(b, row.title)
+    ret str.BufStr(b)
+end
+
+// Writes owned text in at most max cells; a cut is marked by Truncate. Frees
+// both the text and any cut copy.
+func _putCelled(buf: basalam.Buffer, x: int, y: int, text: str, max: int, sgr: str):
+    if CellWidth(text) <= max:
+        buf.put_str(x, y, text, sgr)
+    else:
+        cut := Truncate(text, max)
+        buf.put_str(x, y, cut, sgr)
+        _freeStr(cut)
+    end
+    _freeStr(text)
+end
+
+@en "PlaylistRenderedRows"
+/// The number of rows the last Playlist.render formatted: the visible window,
+/// never the library. Reset at the start of every render.
+pub func PlaylistRenderedRows(): int:
+    ret _renderedRows
+end
