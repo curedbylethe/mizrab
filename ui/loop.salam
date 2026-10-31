@@ -48,11 +48,19 @@ func _keymap(): basalam.Keymap:
     ret km
 end
 
-// Applies the verbs in the order the keys arrived, then empties the list.
+// Applies the verbs in the order the keys arrived, then empties the list. The
+// two prompts are ui-internal: they open a mode here and never reach the app.
 func _drain(onCommand: func (Command)):
     mut i := 0
     until i < pending.len():
-        onCommand(pending.get(i))
+        command := pending.get(i)
+        if command == Command.OpenSearch:
+            OpenSearch()
+        else command == Command.OpenCommandLine:
+            OpenCommandLine()
+        else:
+            onCommand(command)
+        end
         i = i + 1
     end
     pending.clear()
@@ -97,6 +105,9 @@ pub func Run(flagPath: str, sh &: Shell, onCommand: func (Command), onTick: func
             sh.Resize(ev.width, ev.height)
         end
         _drain(onCommand)
+        // The prompt asked for a focus move while it handled the key; a widget
+        // cannot reach the screen, so it happens here, before the paint.
+        ApplyFocus(sh.screen)
         // basalam's own rule, restated because this loop owns the iteration.
         if not consumed and ev.is_ctrl("c"):
             sh.screen.stop()

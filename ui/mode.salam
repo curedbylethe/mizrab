@@ -1,0 +1,219 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The prompt: one mode flag, one query saved when `/` was pressed, and one
+// unregistered `basalam.Input`. The state is package level for the same reason
+// the library view is: `Screen.add` boxes a copy, so the widget that paints the
+// prompt would otherwise hold a private editor. The `Input` is created once and
+// never added to the screen — that is the one escape from the boxed-copy rule:
+// the registered widget is `Prompt`, and it reads and drives this input at
+// render and event time, so the caret, the tail window and the clipping stay
+// basalam's while submit, Esc and the accepted-search verb stay ours (G5, G24).
+//
+// Modes are focus plus this flag, not a second keymap (G14): `Prompt` sits on
+// the keys stop and consumes typing before the keymap resolves `j`, `q` or `:`.
+// A widget cannot reach the screen, so opening and closing only record the id
+// the focus must move to; `ApplyFocus` applies it once after dispatch.
+
+package ui
+
+import str
+import term
+import "github.com/curedbylethe/basalam/basalam"
+
+mut _mode := Mode.Normal
+
+// The query that was in force when `/` was pressed, so Esc can restore it.
+mut _saved := ""
+
+// The focus a consumed key asked for, applied after dispatch by ApplyFocus.
+mut _focus := basalam.NoWidget
+
+mut _input := basalam.NewInput()
+
+@en "Mode"
+/// What the footer prompt is doing: nothing, live filtering, or the command
+/// line (stage 06 parses it).
+pub enum Mode:
+    Normal
+    Search
+    Command
+end
+
+@en "Prompt"
+/// The footer keys slot: the hint line at rest, the label run and editor while a
+/// prompt is open, and the live match count in search mode.
+pub struct Prompt:
+    pub use basalam.BaseWidget
+
+    @en "focusable"
+    /// Always a stop: the footer keeps its four focus positions in every mode.
+    pub func focusable(): bool:
+        ret true
+    end
+
+    @en "handle_event"
+    /// At rest, consumes nothing, so every key reaches the keymap exactly as
+    /// before. While open, Esc and Enter are the prompt's and every other key
+    /// goes to the editor; a changed text re-applies the filter.
+    pub func handle_event(event: basalam.Event): bool:
+        if _mode == Mode.Normal or event.kind != basalam.KeyEvent:
+            ret false
+        end
+        code := event.key.code
+        if code == term.KeyEscape:
+            if _mode == Mode.Search:
+                LibraryFilter(_saved)
+            end
+            CloseMode()
+            ret true
+        end
+        if code == term.KeyEnter:
+            if _mode == Mode.Search:
+                LibraryFilter(_input.value())
+                CloseMode()
+                pending.push(Command.SearchAccepted)
+            end
+            ret true
+        end
+        consumed := _input.handle_event(event)
+        if consumed and _mode == Mode.Search:
+            text := _input.value()
+            if text != LibraryQuery():
+                LibraryFilter(text)
+            end
+        end
+        ret consumed
+    end
+
+    @en "render"
+    /// Draws the keys slot: the stage-02 hint line at rest, otherwise ` / ` (or
+    /// ` : `) inverse while focused, the editor, and — in search mode — the
+    /// right-aligned `visible of rows` count when the slot has room for it.
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        if _mode == Mode.Normal:
+            label := _fitHints(bounds.width - 2)
+            if buf.focused:
+                buf.put_str(bounds.x, bounds.y, " " + label + " ", _focus_sgr())
+            else:
+                buf.put_str(
+                    bounds.x + 1, bounds.y, label, basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier())
+                )
+            end
+            ret
+        end
+        mut label := " / "
+        if _mode == Mode.Command:
+            label = " : "
+        end
+        mut labelStyle := basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier())
+        if buf.focused:
+            labelStyle = _focus_sgr()
+        end
+        buf.put_str(bounds.x, bounds.y, label, labelStyle)
+        mut count := ""
+        if _mode == Mode.Search:
+            count = str.FromInt(LibraryVisibleCount() as i64) + " of " + str.FromInt(LibraryRows() as i64)
+        end
+        mut cw := term.Width(count)
+        // A count that would leave the editor no cell is dropped, not clipped.
+        if cw > 0 and 3 + cw >= bounds.width:
+            count = ""
+            cw = 0
+        end
+        iw := bounds.width - 3 - cw
+        if iw <= 0:
+            ret
+        end
+        _input.set_bounds(basalam.Rect { x = bounds.x + 3, y = bounds.y, width = iw, height = 1 })
+        _input.render(buf, _input.bounds())
+        if cw > 0:
+            buf.put_str(
+                bounds.x + bounds.width - cw, bounds.y, count, basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, basalam.DetectTier())
+            )
+        end
+    end
+end
+
+@en "ModeName"
+/// The footer word for a mode: `normal`, `search` or `command`.
+pub func ModeName(m: Mode): str:
+    if m == Mode.Search:
+        ret "search"
+    else m == Mode.Command:
+        ret "command"
+    end
+    ret "normal"
+end
+
+@en "CurrentMode"
+/// The prompt mode in force. Named CurrentMode because the enum already owns
+/// the name Mode, which Salam would resolve the call to.
+pub func CurrentMode(): Mode:
+    ret _mode
+end
+
+@en "PromptText"
+/// The prompt's text, without styles.
+pub func PromptText(): str:
+    ret _input.value()
+end
+
+@en "PromptMode"
+/// The prompt mode in force; the same value CurrentMode returns, named for the
+/// prompt's callers.
+pub func PromptMode(): Mode:
+    ret _mode
+end
+
+@en "OpenSearch"
+/// Enters search mode with the current query in the editor and asks the loop to
+/// focus the keys stop. The pre-`/` query is kept for Esc.
+pub func OpenSearch():
+    _freeStr(_saved)
+    _saved = str.Clone(LibraryQuery())
+    _mode = Mode.Search
+    _input.set_value(LibraryQuery())
+    _focus = KeysId
+end
+
+@en "OpenCommandLine"
+/// Enters command mode with an empty editor and asks the loop to focus the keys
+/// stop.
+pub func OpenCommandLine():
+    _mode = Mode.Command
+    _input.set_value("")
+    _focus = KeysId
+end
+
+@en "CloseMode"
+/// Returns to normal mode and asks the loop to put the focus back on the
+/// playlist.
+pub func CloseMode():
+    _mode = Mode.Normal
+    _focus = PlaylistId
+end
+
+@en "ApplyFocus"
+/// Applies the focus the last consumed key asked for. A widget has no screen,
+/// so the prompt records the id and the loop — or a headless test — applies it
+/// after dispatch, which is the same shape as the pending command vector.
+pub func ApplyFocus(screen &: basalam.Screen):
+    if _focus != basalam.NoWidget:
+        id := _focus
+        _focus = basalam.NoWidget
+        _ := screen.focus(id)
+    end
+end

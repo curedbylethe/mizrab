@@ -1,0 +1,254 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Drives the footer prompt headless: `/` filters live with the count, typing `q`
+// stays in the prompt, Esc restores the pre-`/` query and the playlist focus,
+// Enter keeps the filter and reports one SearchAccepted, `:` opens command mode
+// and Esc leaves it, and the 40 × 12 keys slot holds the label, the text and the
+// count. start() is never called, so the golden stays byte-exact.
+
+import str
+import term
+import testing
+import "github.com/curedbylethe/basalam/basalam"
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+// Verbs the loop reported. A package global because a lambda captures by value.
+mut applied := Vector {} as Vector<ui.Command>
+
+func key(seq: str): basalam.Event:
+    ret basalam.Event { kind = basalam.KeyEvent, key = term.Decode(seq) }
+end
+
+func record(command: ui.Command):
+    applied.push(command)
+end
+
+func track(path: str, title: str, artist: str, album: str): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, tagged = true, format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+// Four rows and exactly one `blue`: the title and album of the first match, and
+// three rows that must leave the frame once the filter is applied.
+func four(): library.Index:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/a.flac", "Blue in Green", "Miles Davis", "Kind of Blue"))
+    v.push(track("/m/b.flac", "Nina", "Nina Hagen", "Nacht"))
+    v.push(track("/m/c.flac", "So What", "Miles Davis", "Quiet"))
+    v.push(track("/m/d.flac", "Freddie Freeloader", "Miles Davis", "Quiet"))
+    ret indexOf(v)
+end
+
+func charAt(y: int, x: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, 1)
+end
+
+func slice(y: int, x: int, n: int, buf: basalam.Buffer): str:
+    ret str.CharSubstr(buf.row_text(y), x, n)
+end
+
+// Typing draws the label run inverse, the text, the right-aligned count and only
+// the matching body row; `q` is text, not quit.
+func test_search_filters_live():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenSearch()
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Search)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.KeysId)
+
+    testing.AssertTrue(shell.screen.dispatch(key("b")))
+    testing.AssertTrue(shell.screen.dispatch(key("l")))
+    testing.AssertTrue(shell.screen.dispatch(key("u")))
+    testing.AssertTrue(shell.screen.dispatch(key("e")))
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    // Keys slot at 100 × 30: x 13, width 76; the count ends at x + 76.
+    testing.AssertEqStr(slice(29, 13, 7, shell.screen.buffer), " / blue")
+    testing.AssertEqStr(slice(29, 83, 6, shell.screen.buffer), "1 of 4")
+    testing.AssertTrue(str.Contains(shell.screen.buffer.get(13, 29).style, term.Sgr(term.StyleReverse)))
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(2), "Blue in Green"))
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(3), "Nina"))
+    testing.AssertFalse(str.Contains(shell.screen.buffer.row_text(2), "So What"))
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(29), "search"))
+
+    // `q` never reaches the keymap while the prompt is open.
+    testing.AssertTrue(shell.screen.dispatch(key("q")))
+    testing.AssertEqStr(ui.PromptText(), "blueq")
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Search)
+    testing.AssertFalse(shell.screen.running)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertEqStr(slice(29, 13, 8, shell.screen.buffer), " / blueq")
+end
+
+// Esc puts back the query that was in force before `/` and the playlist focus.
+func test_escape_restores():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenSearch()
+    ui.ApplyFocus(shell.screen)
+    _ := shell.screen.dispatch(key("b"))
+    _ := shell.screen.dispatch(key("l"))
+    _ := shell.screen.dispatch(key("u"))
+    _ := shell.screen.dispatch(key("e"))
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertEqStr(ui.LibraryQuery(), "")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 4)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(29), "normal"))
+end
+
+// Enter keeps the filter, returns the focus and reports the accepted search
+// once, through the same pending vector the loop drains.
+func test_enter_accepts():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenSearch()
+    ui.ApplyFocus(shell.screen)
+    _ := shell.screen.dispatch(key("b"))
+    _ := shell.screen.dispatch(key("l"))
+    _ := shell.screen.dispatch(key("u"))
+    _ := shell.screen.dispatch(key("e"))
+
+    testing.AssertTrue(shell.screen.dispatch(key("\r")))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertEqStr(ui.LibraryQuery(), "blue")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+
+    // The accepted search is on the loop's pending list. One headless run that
+    // stops at once drains it, which is exactly where the loop test starts too.
+    mut drain := ui.NewShell(80, 24)
+    defer drain.Close()
+    applied.clear()
+    _ := drain.screen.post(key("q"))
+    ui.Run("", drain, (command: ui.Command): record(command) end, (): end)
+    testing.AssertEqInt(applied.len(), 1)
+    testing.AssertTrue(applied.get(0) == ui.Command.SearchAccepted)
+end
+
+// `:` opens command mode with an empty prompt; Esc leaves it without parsing.
+func test_command_mode():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    ui.OpenCommandLine()
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Command)
+    testing.AssertEqStr(ui.PromptText(), "")
+    testing.AssertEqInt(shell.screen.focused_id(), ui.KeysId)
+    shell.screen.dirty = true
+    shell.screen.draw()
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(29), "command"))
+    testing.AssertEqStr(slice(29, 13, 3, shell.screen.buffer), " : ")
+
+    testing.AssertTrue(shell.screen.dispatch(key("\x1b")))
+    ui.ApplyFocus(shell.screen)
+    testing.AssertTrue(ui.CurrentMode() == ui.Mode.Normal)
+    testing.AssertEqInt(shell.screen.focused_id(), ui.PlaylistId)
+end
+
+// At 40 × 12 the footer gives the slot 26 cells at x 4: the label, the text and
+// the count all fit, and the mode word starts at 30.
+func test_floor_40x12():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(40, 12)
+    defer shell.Close()
+    ui.OpenSearch()
+    ui.ApplyFocus(shell.screen)
+    _ := shell.screen.dispatch(key("b"))
+    _ := shell.screen.dispatch(key("l"))
+    _ := shell.screen.dispatch(key("u"))
+    _ := shell.screen.dispatch(key("e"))
+    shell.screen.dirty = true
+    shell.screen.draw()
+
+    testing.AssertEqStr(slice(11, 4, 3, shell.screen.buffer), " / ")
+    testing.AssertEqStr(slice(11, 7, 4, shell.screen.buffer), "blue")
+    testing.AssertEqStr(slice(11, 24, 6, shell.screen.buffer), "1 of 4")
+    testing.AssertEqStr(charAt(11, 29, shell.screen.buffer), "4")
+    testing.AssertEqStr(charAt(11, 30, shell.screen.buffer), " ")
+    testing.AssertTrue(str.Contains(slice(11, 4, 26, shell.screen.buffer), " / blue"))
+    testing.AssertTrue(str.Contains(slice(11, 4, 26, shell.screen.buffer), "1 of 4"))
+    testing.AssertTrue(str.Contains(shell.screen.buffer.row_text(11), "search"))
+end
+
+// End to end through the loop: `/` opens the prompt, typing filters, Enter
+// reports exactly one SearchAccepted and `q` still stops the screen.
+func test_loop_reports_accepted_once():
+    _ := ui.LibraryLoadIndex(four())
+    ui.LibraryFilter("")
+    mut shell := ui.NewShell(100, 30)
+    defer shell.Close()
+    applied.clear()
+    _ := shell.screen.post(key("/"))
+    _ := shell.screen.post(key("b"))
+    _ := shell.screen.post(key("l"))
+    _ := shell.screen.post(key("u"))
+    _ := shell.screen.post(key("e"))
+    _ := shell.screen.post(key("\r"))
+    _ := shell.screen.post(key("q"))
+
+    ui.Run("", shell, (command: ui.Command): record(command) end, (): end)
+    testing.AssertEqInt(applied.len(), 1)
+    testing.AssertTrue(applied.get(0) == ui.Command.SearchAccepted)
+    testing.AssertEqStr(ui.LibraryQuery(), "blue")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+    testing.AssertFalse(shell.screen.running)
+end
+
+func main(): int:
+    test_search_filters_live()
+    test_escape_restores()
+    test_enter_accepts()
+    test_command_mode()
+    test_floor_40x12()
+    test_loop_reports_accepted_once()
+    ret testing.Summary()
+end
