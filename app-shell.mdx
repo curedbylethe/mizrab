@@ -63,7 +63,7 @@ The context text is a placeholder and stays one until CUR-508 supplies a real va
 
 **Below 60 columns or 12 rows the tree is replaced.** The whole `Column` gives way to one centred line, `too small · 60 × 12`, in bright black. `60 × 12` itself is still the drawn layout; only less than that degrades.
 
-**A resize is picked up within one tick.** basalam's own resize event never arrives — its SIGWINCH watcher leaves its loop as soon as `sigwait` reports no signal — so the loop compares the terminal size against the buffer on every tick and refits the tree and the cover when they differ. Shrinking a live shell from 100 × 30 to 50 × 10 replaces the tree with the `too small` line, and growing it back restores the tree.
+**A resize is picked up within one tick.** basalam's own resize event never arrives: its SIGWINCH watcher is gone within a second of start, and an explicit `kill -WINCH` on a running shell produces no repaint at all. So the loop compares the terminal size against the buffer on every tick and refits the tree and the cover when they differ. Shrinking a live shell from 100 × 30 to 50 × 10 replaces the tree with the `too small` line, and growing it back restores the tree.
 
 ## Terminal safety
 
@@ -125,7 +125,7 @@ The spread is real: the number depends on the machine, its load and the process 
 | Twenty play/stop cycles | 6 / 6 | 1 / 1 |
 | Shell open, no churn | 6 / 6 | 2 / 2 |
 
-**Against the baseline.** The churn costs nothing: zero more files and zero more threads after twenty open/play/stop/close cycles than before any. A running shell holds one more thread than an idle process — the screen's input thread, parked in its poll. It is one, not two, because basalam's SIGWINCH watcher leaves its loop immediately when `sigwait` reports no signal; that is also why the loop polls the terminal size on each tick instead of waiting for a resize event.
+**Against the baseline.** The churn costs nothing: zero more files and zero more threads after twenty open/play/stop/close cycles than before any. A running shell holds one more thread than an idle process — the screen's input thread, parked in its poll. It is one, not two, because basalam's SIGWINCH watcher is already gone by the first sample; that is also why the loop polls the terminal size on each tick instead of waiting for a resize event.
 
 **Child processes are zero by construction.** The shell spawns none, so the page states the count instead of measuring it.
 
