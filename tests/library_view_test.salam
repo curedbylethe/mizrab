@@ -1,0 +1,301 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the library view headless: the index-to-row conversion and its order,
+// the Unicode-folded filter over artist, title and album, the cursor clamp and
+// its rejection of an out-of-range position, the playing-row lookup, the two
+// duration formats and the change flag the loop drains.
+//
+// The 1,000-row fixture is built in memory, never read from disk: stages 03 and
+// 08 want the same rows without a checked-in index file.
+
+import str
+import testing
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+link static "../build/library_shim.o"
+
+func track(path: str, title: str, artist: str, album: str, ms: i64): library.Track:
+    ret library.Track {
+        path = path, title = title, artist = artist, album = album, durationMs = ms, tagged = true,
+        format = "flac",
+    }
+end
+
+func indexOf(tracks: Vector<library.Track>): library.Index:
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < tracks.len():
+        idx.tracks.push(tracks.get(i))
+        i = i + 1
+    end
+    ret idx
+end
+
+// Deliberately not in path order, so the test fails if the view sorts.
+func three(): Vector<library.Track>:
+    mut v := Vector {} as Vector<library.Track>
+    v.push(track("/m/zz.flac", "Kind of Blue", "Miles Davis", "Blue Train", 545000 as i64))
+    v.push(track("/m/aa.flac", "ÜBER ALLES", "Nina Hagen", "Nacht", 0 as i64))
+    v.push(track("/m/mm.flac", "Sketches", "Miles Davis", "Blue", 0 - 1 as i64))
+    ret v
+end
+
+func load(): int:
+    ret ui.LibraryLoadIndex(indexOf(three()))
+end
+
+func assertZeroRow(r: ui.Row):
+    testing.AssertEqStr(r.path, "")
+    testing.AssertEqStr(r.title, "")
+    testing.AssertEqStr(r.artist, "")
+    testing.AssertEqStr(r.album, "")
+    testing.AssertEqInt64(r.durationMs, 0)
+end
+
+// Order is the index's, and every displayed string is copied out of the track.
+func test_conversion():
+    testing.AssertEqInt(load(), 3)
+    testing.AssertEqInt(ui.LibraryRows(), 3)
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 3)
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+
+    r := ui.LibraryRowAt(0)
+    testing.AssertEqStr(r.path, "/m/zz.flac")
+    testing.AssertEqStr(r.title, "Kind of Blue")
+    testing.AssertEqStr(r.artist, "Miles Davis")
+    testing.AssertEqStr(r.album, "Blue Train")
+    testing.AssertEqInt64(r.durationMs, 545000)
+
+    testing.AssertEqStr(ui.LibraryRowAt(1).title, "ÜBER ALLES")
+    testing.AssertEqStr(ui.LibraryRowAt(2).path, "/m/mm.flac")
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "/m/zz.flac")
+
+    assertZeroRow(ui.LibraryRowAt(3))
+    assertZeroRow(ui.LibraryRowAt(-1))
+end
+
+// "blue" hits a title on one row and an album on another; the fold is Unicode,
+// so a query in lower case finds a row whose title is upper case Ü.
+func test_filter():
+    _ := load()
+    ui.LibraryFilter("blue")
+    testing.AssertEqStr(ui.LibraryQuery(), "blue")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 2)
+    testing.AssertEqStr(ui.LibraryRowAt(0).path, "/m/zz.flac")
+    testing.AssertEqStr(ui.LibraryRowAt(1).path, "/m/mm.flac")
+
+    ui.LibraryFilter("BLUE")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 2)
+
+    ui.LibraryFilter("über")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+    testing.AssertEqStr(ui.LibraryRowAt(0).path, "/m/aa.flac")
+
+    ui.LibraryFilter("ÜBER")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1)
+
+    ui.LibraryFilter("nina davis")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 0)
+
+    ui.LibraryFilter("zzz")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 0)
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "")
+    assertZeroRow(ui.LibrarySelectedRow())
+    assertZeroRow(ui.LibraryRowAt(0))
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 0 - 1)
+
+    ui.LibraryFilter("")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 3)
+    testing.AssertEqInt(ui.LibraryRows(), 3)
+end
+
+func test_cursor():
+    _ := load()
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+    ui.LibraryMove(0 - 1)
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+    ui.LibraryMove(1)
+    testing.AssertEqInt(ui.LibraryCursor(), 1)
+    ui.LibraryMove(99)
+    testing.AssertEqInt(ui.LibraryCursor(), 2)
+    ui.LibraryMove(0 - 99)
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+
+    testing.AssertTrue(ui.LibrarySetCursor(2))
+    testing.AssertEqInt(ui.LibraryCursor(), 2)
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "/m/mm.flac")
+    testing.AssertFalse(ui.LibrarySetCursor(3))
+    testing.AssertEqInt(ui.LibraryCursor(), 2)
+    testing.AssertFalse(ui.LibrarySetCursor(0 - 1))
+    testing.AssertEqInt(ui.LibraryCursor(), 2)
+end
+
+// The cursor survives a filter as a position, so the selection follows the row
+// that position names in the new visible order.
+func test_selection_after_filter():
+    _ := load()
+    testing.AssertTrue(ui.LibrarySetCursor(2))
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "/m/mm.flac")
+
+    ui.LibraryFilter("blue")
+    testing.AssertEqInt(ui.LibraryCursor(), 1)
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "/m/mm.flac")
+
+    ui.LibraryFilter("kind")
+    testing.AssertEqInt(ui.LibraryCursor(), 0)
+    testing.AssertEqStr(ui.LibrarySelectedPath(), "/m/zz.flac")
+    testing.AssertEqStr(ui.LibrarySelectedRow().title, "Kind of Blue")
+end
+
+func test_playing():
+    _ := load()
+    ui.SetPlaying("/m/mm.flac")
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 2)
+
+    ui.LibraryFilter("blue")
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 1)
+
+    ui.LibraryFilter("kind")
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 0 - 1)
+
+    ui.LibraryFilter("")
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 2)
+
+    ui.SetPlaying("")
+    testing.AssertEqInt(ui.LibraryPlayingRow(), 0 - 1)
+end
+
+func test_durations():
+    testing.AssertEqStr(ui.DurationShort(545000 as i64), "9:05")
+    testing.AssertEqStr(ui.DurationClock(545000 as i64), "09:05")
+    testing.AssertEqStr(ui.DurationShort(59000 as i64), "0:59")
+    testing.AssertEqStr(ui.DurationClock(59000 as i64), "00:59")
+    testing.AssertEqStr(ui.DurationShort(1000 as i64), "0:01")
+    testing.AssertEqStr(ui.DurationClock(1000 as i64), "00:01")
+    testing.AssertEqStr(ui.DurationShort(0 as i64), "--:--")
+    testing.AssertEqStr(ui.DurationClock(0 as i64), "--:--")
+    testing.AssertEqStr(ui.DurationShort(0 - 1 as i64), "--:--")
+    testing.AssertEqStr(ui.DurationClock(0 - 1 as i64), "--:--")
+    testing.AssertEqStr(ui.DurationShort(3600000 as i64), "60:00")
+    testing.AssertEqStr(ui.DurationClock(3600000 as i64), "60:00")
+end
+
+func test_change_flag():
+    _ := load()
+    ui.ClearViewChanged()
+    testing.AssertFalse(ui.ViewChanged())
+
+    ui.LibraryFilter("blue")
+    testing.AssertTrue(ui.ViewChanged())
+    ui.ClearViewChanged()
+    testing.AssertFalse(ui.ViewChanged())
+
+    ui.LibraryMove(1)
+    testing.AssertTrue(ui.ViewChanged())
+    ui.ClearViewChanged()
+    testing.AssertFalse(ui.ViewChanged())
+
+    ui.SetPlaying("/m/zz.flac")
+    testing.AssertTrue(ui.ViewChanged())
+    ui.ClearViewChanged()
+    testing.AssertFalse(ui.ViewChanged())
+
+    // A rejected cursor move changes nothing, so it asks for no repaint.
+    testing.AssertFalse(ui.LibrarySetCursor(99))
+    testing.AssertFalse(ui.ViewChanged())
+
+    _ := load()
+    testing.AssertTrue(ui.ViewChanged())
+end
+
+// 1,000 rows in memory: titles "track 1" … "track 1000", a CJK title every
+// hundredth row, three artists and albums, and durations that are -1, 0 or real.
+func bigIndex(): library.Index:
+    artists := ["Alpha", "Beta", "Gamma"]
+    albums := ["First", "Second", "Third"]
+    mut idx := library.EmptyIndex()
+    mut i := 0
+    until i < 1000:
+        n := i + 1
+        mut title := "track " + str.FromInt(n as i64)
+        if i % 100 == 0:
+            title = "東京 " + str.FromInt(n as i64)
+        end
+        mut ms := 180000 as i64 + (i as i64) * 1000 as i64
+        if i % 7 == 0:
+            ms = 0 - 1
+        else i % 11 == 0:
+            ms = 0
+        end
+        idx.tracks.push(
+            library.Track {
+                path = "/lib/" + str.FromInt(n as i64) + ".flac", title = title, artist = artists[i % 3],
+                album = albums[i % 3], durationMs = ms, tagged = true, format = "flac",
+            }
+        )
+        i = i + 1
+    end
+    ret idx
+end
+
+func test_thousand_rows():
+    testing.AssertEqInt(ui.LibraryLoadIndex(bigIndex()), 1000)
+    testing.AssertEqInt(ui.LibraryRows(), 1000)
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1000)
+    testing.AssertEqStr(ui.LibraryRowAt(0).title, "東京 1")
+    testing.AssertEqStr(ui.LibraryRowAt(999).path, "/lib/1000.flac")
+
+    // One artist in three, in index order.
+    ui.LibraryFilter("gamma")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 333)
+    testing.AssertEqStr(ui.LibraryRowAt(0).path, "/lib/3.flac")
+    testing.AssertEqStr(ui.LibraryRowAt(332).path, "/lib/999.flac")
+    testing.AssertEqInt(ui.LibraryRows(), 1000)
+
+    // Every hundredth title is CJK; the other thousand rows have none.
+    ui.LibraryFilter("東京")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 10)
+    testing.AssertEqStr(ui.LibraryRowAt(0).title, "東京 1")
+    testing.AssertEqStr(ui.LibraryRowAt(9).title, "東京 901")
+    ui.LibraryFilter("东京")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 0)
+
+    ui.LibraryFilter("")
+    testing.AssertEqInt(ui.LibraryVisibleCount(), 1000)
+    ui.LibraryMove(9999)
+    testing.AssertEqInt(ui.LibraryCursor(), 999)
+    last := ui.LibraryRowAt(999)
+    testing.AssertEqStr(last.title, "track 1000")
+    testing.AssertEqStr(last.album, "First")
+    testing.AssertEqStr(ui.DurationShort(last.durationMs), "19:39")
+    testing.AssertEqStr(ui.DurationClock(last.durationMs), "19:39")
+    assertZeroRow(ui.LibraryRowAt(1000))
+end
+
+func main(): int:
+    test_conversion()
+    test_filter()
+    test_cursor()
+    test_selection_after_filter()
+    test_playing()
+    test_durations()
+    test_change_flag()
+    test_thousand_rows()
+    ret testing.Summary()
+end
