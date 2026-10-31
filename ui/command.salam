@@ -69,18 +69,21 @@ func _noArgs(name: str): str:
         ret "next takes no arguments"
     else name == "prev":
         ret "prev takes no arguments"
+    else name == "help":
+        ret "help takes no arguments"
     end
     ret "quit takes no arguments"
 end
 
 // The completion table, in display order. A trailing space marks the verbs that
-// take an argument (stage 07 inserts `help ` after prev).
+// take an argument.
 func _table(): Vector<str>:
     mut t := Vector {} as Vector<str>
     t.push("next")
     t.push("pause")
     t.push("play")
     t.push("prev")
+    t.push("help")
     t.push("quit")
     t.push("search ")
     t.push("seek ")
@@ -91,8 +94,8 @@ end
 @en "Parse"
 /// Parses `text` per the command grammar: trimmed, split at the first space,
 /// then one of play (0-1), search (1), seek and volume (a validated number),
-/// pause, next, prev, q and quit (0). An empty prompt is `ok = false` with no
-/// error, so Enter on it only closes.
+/// pause, next, prev, help, q and quit (0). An empty prompt is `ok = false`
+/// with no error, so Enter on it only closes.
 pub func Parse(text: str): Parsed:
     t := str.Trim(text)
     if t == "":
@@ -147,13 +150,15 @@ pub func Parse(text: str): Parsed:
         else:
             error = _noArgs("quit")
         end
-    else head == "pause" or head == "next" or head == "prev":
+    else head == "pause" or head == "next" or head == "prev" or head == "help":
         if head == "pause":
             name = "pause"
         else head == "next":
             name = "next"
-        else:
+        else head == "prev":
             name = "prev"
+        else:
+            name = "help"
         end
         if arg == "":
             ok = true
@@ -173,7 +178,7 @@ pub func Parse(text: str): Parsed:
 end
 
 @en "Completions"
-/// The completion rows for `text`, in display order: all eight for an empty
+/// The completion rows for `text`, in display order: all nine for an empty
 /// prompt, prefix matches for a text without a space, and only the argument
 /// takers once a space has been typed. The rows are borrowed literals; the
 /// caller frees the vector.

@@ -1,0 +1,434 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// The two overlays: the help panel and the quit confirmation. Both are basalam
+// Modals, registered once at shell construction and hidden, so the four focus
+// stops at rest are unchanged and neither joins the focus order.
+//
+// A widget cannot reach the screen, so the whole protocol lives here as
+// functions the keymap, the command sink and the loop call. Open is
+// set_size + set_bounds + push_focus + raise_subtree; close is unraise_subtree
+// + pop_focus. Esc is Modal's own: it closes the stored widget and calls
+// on_close, which here only records the id, and the loop mirrors the unraise
+// and pop after dispatch. An explicit close does the same two calls itself.
+//
+// The modals are never re-parented, removed or rebuilt after add: Modal keeps
+// its title, size, bounds and visibility in shared state, and its panel child
+// is placed by set_bounds. Only takes_focus, on_close and border_style are
+// plain fields, and all three are set before add.
+//
+// The guard keeps the degrade cover authoritative: below 40 x 12 both refuse to
+// open. The panel child never handles keys and never draws outside its own
+// bounds, so the scrim stays Modal's.
+
+package ui
+
+import str
+import "github.com/curedbylethe/basalam/basalam"
+
+// The help block: keys right-aligned in 10 cells, two cells of gap, then the
+// descriptions. 29 cells wide, the widest pair being `hjkl / tab` and
+// `quit (asks first)`.
+const _HELP_KEY_W := 10
+
+const _HELP_BLOCK_W := 29
+
+const _HELP_ROWS := 6
+
+const _ESC_CLOSE := "esc close"
+
+// The quit block, fixed at six rows: the question, a blank, the track, the
+// artist, a blank, the keys. The dialog is always 8 rows tall, so its six inner
+// rows hold the block exactly and nothing needs a drop ladder.
+const _QUIT_ROWS := 6
+
+// The overlay the command sink queued: it runs on the loop thread but with a
+// copy of the shell (a lambda captures by value), so it cannot touch the live
+// screen. The loop applies this after the drain, like ApplyFocus.
+const _WANT_NONE := 0
+
+const _WANT_HELP := 1
+
+const _WANT_QUIT := 2
+
+mut _want := _WANT_NONE
+
+// The modal Esc closed and the loop has not mirrored yet, or NoWidget.
+mut _closed := basalam.NoWidget
+
+mut _help := basalam.NewModal()
+
+mut _quit := basalam.NewModal()
+
+// The panel inside a modal: it draws text and never handles keys. One boolean
+// picks the block because the two panels differ only in content.
+struct OverlayPanel:
+    pub use basalam.BaseWidget
+
+    quit: bool = false
+
+    pub func focusable(): bool:
+        ret false
+    end
+
+    pub func handle_event(event: basalam.Event): bool:
+        _ := event
+        ret false
+    end
+
+    pub func render(buf: basalam.Buffer, bounds: basalam.Rect):
+        if bounds.width <= 0 or bounds.height <= 0:
+            ret
+        end
+        // Modal draws the interior's ring and the scrim, never the interior
+        // itself: without this fill the layer-0 frame shows through the dialog
+        // wherever the content does not reach.
+        buf.fill(bounds, " ", "")
+        if this.quit:
+            _renderQuit(buf, bounds)
+        else:
+            _renderHelp(buf, bounds)
+        end
+    end
+end
+
+// The shared open: guard, then the size, bounds, focus and raise in the order
+// Modal requires (push before raise, or the raise leaves a stale focus entry).
+func _open(screen &: basalam.Screen, quit: bool): bool:
+    w := screen.buffer.width
+    h := screen.buffer.height
+    if w < _MIN_WIDTH or h < _MIN_HEIGHT:
+        ret false
+    end
+    body := basalam.Rect { x = 0, y = 1, width = w, height = h - 2 }
+    span := _overlaySize(body.width, body.height, quit)
+    mut modal := _help
+    mut id := HelpModalId
+    if quit:
+        modal = _quit
+        id = QuitModalId
+    end
+    modal.set_size(basalam.ModalSize.Fixed(span.x, span.y))
+    modal.set_bounds(body)
+    modal.open()
+    _ := screen.push_focus(id)
+    screen.raise_subtree(id)
+    // `:help` and `:q` reach here from the command line, whose submit queued a
+    // focus move back to the playlist. The overlay takes the focus now, so that
+    // pending move must not undo the push when the loop applies it.
+    _focus = basalam.NoWidget
+    ret true
+end
+
+// The dialog span inside a body of bw x bh. Width is 60% rounded, clamped to
+// 40..72; height is half rounded, clamped to 8..16 for help and fixed at 8 for
+// quit. Both are capped at the body so a dialog never exceeds it.
+func _overlaySize(bw: int, bh: int, quit: bool): basalam.Point:
+    mut span := _clamp((bw * 6 + 5) / 10, 40, 72)
+    if span > bw:
+        span = bw
+    end
+    mut tall := 8
+    if not quit:
+        tall = _clamp((bh + 1) / 2, 8, 16)
+    end
+    if tall > bh:
+        tall = bh
+    end
+    ret basalam.Point { x = span, y = tall }
+end
+
+func _clamp(v: int, lo: int, hi: int): int:
+    mut out := v
+    if out < lo:
+        out = lo
+    end
+    if out > hi:
+        out = hi
+    end
+    ret out
+end
+
+// The help block: six rows centred in the panel, with the last inner row kept
+// for `esc close` when there is one to spare. At six inner rows (the 40 x 12
+// floor) the keys fill the panel and the label is dropped, which is why every
+// line has to fit first.
+func _renderHelp(buf: basalam.Buffer, b: basalam.Rect):
+    tier := basalam.DetectTier()
+    emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+    mut x := b.x + (b.width - _HELP_BLOCK_W) / 2
+    if x < b.x:
+        x = b.x
+    end
+    mut content := b.height
+    if b.height >= _HELP_ROWS + 1:
+        content = b.height - 1
+    end
+    mut y := b.y + (content - _HELP_ROWS) / 2
+    if y < b.y:
+        y = b.y
+    end
+    _helpRow(buf, x, y, "hjkl / tab", "move focus", emphasis)
+    _helpRow(buf, x, y + 1, "space", "play / pause", emphasis)
+    _helpRow(buf, x, y + 2, "n / p", "next / previous", emphasis)
+    _helpRow(buf, x, y + 3, "/", "search", emphasis)
+    _helpRow(buf, x, y + 4, ":", "command", emphasis)
+    _helpRow(buf, x, y + 5, "q", "quit (asks first)", emphasis)
+    if b.height >= _HELP_ROWS + 1:
+        buf.put_str(b.x + b.width - 3 - CellWidth(_ESC_CLOSE), b.y + b.height - 1, _ESC_CLOSE, "")
+    end
+end
+
+// One help row: the key right-aligned in the key column, the description two
+// cells after it. Keys are emphasis, descriptions keep the default style.
+func _helpRow(buf: basalam.Buffer, x: int, y: int, key: str, desc: str, sgr: str):
+    buf.put_str(x + _HELP_KEY_W - CellWidth(key), y, key, sgr)
+    buf.put_str(x + _HELP_KEY_W + 2, y, desc, "")
+end
+
+// The quit block: the question, the track with the playback glyph, the artist
+// indented two cells, then `q quit  esc keep listening`. Every line is centred
+// on its own width; the track falls back to the path tail when the index no
+// longer holds the row, so the dialog always names something.
+func _renderQuit(buf: basalam.Buffer, b: basalam.Rect):
+    tier := basalam.DetectTier()
+    playback := basalam.StyleSgr(basalam.Style { fg = basalam.Green }, tier)
+    emphasis := basalam.StyleSgr(basalam.Style { fg = basalam.BrightWhite, bold = true }, tier)
+    structure := basalam.StyleSgr(basalam.Style { fg = basalam.BrightBlack }, tier)
+
+    mut y := b.y + (b.height - _QUIT_ROWS) / 2
+    if y < b.y:
+        y = b.y
+    end
+    _lineCentred(buf, b, y, "Quit mizrab? Playback will stop.", "")
+
+    path := PlayingPath()
+    row := LibraryRowByPath(path)
+    mut title := row.title
+    mut owned := false
+    if title == "":
+        title = _pathTail(path)
+        owned = true
+    end
+    if title != "":
+        gw := CellWidth(PlaybackGlyph())
+        lw := gw + 1 + CellWidth(title)
+        mut x := b.x + (b.width - lw) / 2
+        if x < b.x:
+            x = b.x
+        end
+        buf.put_str(x, y + 2, PlaybackGlyph(), playback)
+        buf.put_str(x + gw + 1, y + 2, title, emphasis)
+        if row.artist != "":
+            aw := 2 + CellWidth(row.artist)
+            mut ax := b.x + (b.width - aw) / 2
+            if ax < b.x:
+                ax = b.x
+            end
+            buf.put_str(ax, y + 3, "  ", structure)
+            buf.put_str(ax + 2, y + 3, row.artist, structure)
+        end
+    end
+    if owned:
+        _freeStr(title)
+    end
+
+    mut kx := b.x + (b.width - 26) / 2
+    if kx < b.x:
+        kx = b.x
+    end
+    buf.put_str(kx, y + 5, "q quit", emphasis)
+    buf.put_str(kx + 8, y + 5, "esc keep listening", "")
+end
+
+func _lineCentred(buf: basalam.Buffer, b: basalam.Rect, y: int, text: str, sgr: str):
+    mut x := b.x + (b.width - CellWidth(text)) / 2
+    if x < b.x:
+        x = b.x
+    end
+    buf.put_str(x, y, text, sgr)
+end
+
+// The last `/`-separated segment of path, owned; "" when there is none. The
+// fallback name for a track the index no longer holds.
+func _pathTail(path: str): str:
+    n := str.CharCount(path)
+    mut cut := 0
+    mut i := 0
+    until i < n:
+        if str.CharAt(path, i) == "/":
+            cut = i + 1
+        end
+        i = i + 1
+    end
+    ret str.CharSubstr(path, cut, n - cut)
+end
+
+// The quit decision, shared by the key, `:q` and Command.Quit: a track that is
+// playing gets the confirmation, anything else stops the screen now. No track
+// behind the playback word asks nothing — the word alone can outlive the path
+// a headless shell never set — so it stops as before.
+func _quitNow(screen &: basalam.Screen):
+    if PlaybackWord() == "playing" and PlayingPath() != "" and OpenQuit(screen):
+        ret
+    end
+    screen.stop()
+end
+
+@en "NewOverlays"
+/// Registers both modals, hidden, under the screen's root: help then its panel,
+/// quit then its panel, so the ids are HelpModalId..QuitPanelId. Build the
+/// shell's own tree first; NewShell calls this once the root exists.
+pub func NewOverlays(screen &: basalam.Screen):
+    _help = basalam.NewModal()
+    _help.takes_focus = true
+    _help.set_title("help")
+    _help.set_closable(true)
+    _help.on_close = (): _closed = HelpModalId end
+    helpPanel := OverlayPanel {} as dyn basalam.Widget
+    _help.add(helpPanel)
+    helpId := screen.add(RootId, _help as dyn basalam.Widget)
+    _ := screen.add(helpId, helpPanel)
+
+    _quit = basalam.NewModal()
+    _quit.takes_focus = true
+    _quit.set_title("quit?")
+    _quit.set_closable(true)
+    _quit.on_close = (): _closed = QuitModalId end
+    quitPanel := OverlayPanel { quit = true } as dyn basalam.Widget
+    _quit.add(quitPanel)
+    quitId := screen.add(RootId, _quit as dyn basalam.Widget)
+    _ := screen.add(quitId, quitPanel)
+end
+
+@en "OpenHelp"
+/// Opens the help panel over the dimmed body, or refuses while the screen is
+/// below 40 x 12. Returns whether it opened; an open modal keeps the focus and
+/// the raise, so a second call is a no-op above the guard.
+pub func OpenHelp(screen &: basalam.Screen): bool:
+    ret _open(screen, false)
+end
+
+@en "OpenQuit"
+/// Opens the quit confirmation over the dimmed body, same guard as OpenHelp.
+pub func OpenQuit(screen &: basalam.Screen): bool:
+    ret _open(screen, true)
+end
+
+@en "CloseOverlay"
+/// Closes whichever modal is open and mirrors the protocol the Modal leaves to
+/// the app: unraise its subtree, then pop the focus. Returns whether one was
+/// open. The explicit path for a key or a programmatic close; Esc goes through
+/// the Modal and the loop's drain instead.
+pub func CloseOverlay(screen &: basalam.Screen): bool:
+    if _help.visible():
+        _help.close()
+        _closed = basalam.NoWidget
+        screen.unraise_subtree(HelpModalId)
+        _ := screen.pop_focus()
+        ret true
+    end
+    if _quit.visible():
+        _quit.close()
+        _closed = basalam.NoWidget
+        screen.unraise_subtree(QuitModalId)
+        _ := screen.pop_focus()
+        ret true
+    end
+    ret false
+end
+
+@en "ModalQuit"
+/// The modal map's only key. Help closes and then takes the quit path, exactly
+/// as q at rest does; the confirmation stops the screen, playback with it,
+/// which is what the panel promised. Esc never reaches here: the Modal owns it.
+pub func ModalQuit(screen &: basalam.Screen):
+    if _help.visible():
+        _ := CloseOverlay(screen)
+        RequestQuit()
+        ret
+    end
+    screen.stop()
+end
+
+@en "TakeClosedOverlay"
+/// The id of the modal Esc closed since the last call, or basalam.NoWidget.
+/// The loop drains it after dispatch: unraise_subtree(id), then pop_focus.
+pub func TakeClosedOverlay(): int:
+    id := _closed
+    _closed = basalam.NoWidget
+    ret id
+end
+
+@en "OverlayOpen"
+/// True while either modal is visible. The loop forces a full frame then,
+/// because the dim and the ring fall outside the modal's own dispatch region.
+pub func OverlayOpen(): bool:
+    ret _help.visible() or _quit.visible()
+end
+
+@en "OverlayResize"
+/// Re-applies the open modal's size and bounds for the current screen, after
+/// the shell has refitted its tree. Both modals are cheap to re-bound, so this
+/// checks visibility rather than tracking which one the caller means.
+pub func OverlayResize(screen &: basalam.Screen):
+    w := screen.buffer.width
+    h := screen.buffer.height
+    if w < 2 or h < 3:
+        ret
+    end
+    body := basalam.Rect { x = 0, y = 1, width = w, height = h - 2 }
+    if _help.visible():
+        span := _overlaySize(body.width, body.height, false)
+        _help.set_size(basalam.ModalSize.Fixed(span.x, span.y))
+        _help.set_bounds(body)
+    end
+    if _quit.visible():
+        span := _overlaySize(body.width, body.height, true)
+        _quit.set_size(basalam.ModalSize.Fixed(span.x, span.y))
+        _quit.set_bounds(body)
+    end
+end
+
+@en "RequestQuit"
+/// Queues the one quit path for the loop: the confirmation while a track
+/// plays, a stop otherwise. Shared by `q` and by `:q` / Command.Quit, which
+/// reach it from the command sink.
+pub func RequestQuit():
+    _want = _WANT_QUIT
+end
+
+@en "RequestHelp"
+/// Queues the help panel for the loop, which owns the live screen. `:help`
+/// calls this: the verb sink runs with a copy of the shell, so a screen passed
+/// from there would take the focus push and the raise on the copy and lose
+/// them.
+pub func RequestHelp():
+    _want = _WANT_HELP
+end
+
+@en "ApplyOverlay"
+/// Applies the request the command sink queued, against the screen the loop
+/// owns. Called after the command drain and before the frame, which is where
+/// ApplyFocus applies the prompt's own request.
+pub func ApplyOverlay(screen &: basalam.Screen):
+    want := _want
+    _want = _WANT_NONE
+    if want == _WANT_HELP:
+        _ := OpenHelp(screen)
+    else want == _WANT_QUIT:
+        _quitNow(screen)
+    end
+end
