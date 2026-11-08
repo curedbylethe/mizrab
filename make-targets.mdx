@@ -20,7 +20,7 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 | `make check` | `make fmt-check`, `make coverage-check`, then `make test` (which runs `make build`) | the tree-green gate: formatting, ledger, build and test |
 | `make coverage-check` | regenerate `tests/coverage.out` and compare it with the committed ledger | fail when tracked Salam modules or test includes change without updating the ledger |
 
-`make check` is the one command every contributor and CI job runs; the three targets it calls are below, for when one step fails. CI's `check` job calls it on Ubuntu and macOS.
+`make check` is the one command every contributor and CI job runs; the four targets it calls are below, for when one step fails. CI's `check` job calls it on Ubuntu and macOS.
 
 ## Build and run
 
@@ -68,6 +68,8 @@ The marker lines are the ones every source carries: the title, `Built on the Sal
 | --- | --- | --- |
 | `make soak` | `make build`, then `sh tests/soak.sh` | push one hour of frames through the audio engine on a virtual clock and check the frame count and memory |
 
+`make soak` is opt-in: it is not part of `make test` and CI does not run it. It generates a 28.8 MB WAV under `build/soak/`, fails if its sha256 differs from the recorded source hash, ran in 16 to 17 seconds on the recorded macOS runs, and uses a virtual clock, so it makes no wall-clock or device-cadence claim. See [the audio engine](/audio-engine#soak) for the recorded result.
+
 ## Benchmarks
 
 | Target | Runs | Purpose |
@@ -75,8 +77,6 @@ The marker lines are the ones every source carries: the title, `Built on the Sal
 | `make bench` | `make build`, then `sh tests/bench.sh` | append startup, scan-throughput and 200 × 60 frame-time measurements to `bench/results.jsonl` |
 
 `make bench` is opt-in. It records host-specific values and asserts no timing threshold. See [the benchmark history](/repository-layout#benchmarks) for the fields and comparison limits.
-
-`make soak` is opt-in: it is not part of `make test` and CI does not run it. It generates a 28.8 MB WAV under `build/soak/`, fails if its sha256 differs from the recorded source hash, ran in 16 to 17 seconds on the recorded macOS runs, and uses a virtual clock, so it makes no wall-clock or device-cadence claim. See [the audio engine](/audio-engine#soak) for the recorded result.
 
 ## Run the harness directly
 

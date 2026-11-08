@@ -59,7 +59,6 @@ end
 /// Leaves the volume and the backend mode alone. Tests call it between cases.
 pub func Reset():
     audio.Close()
-    playerManual = false
     playerCurrent = ""
     playerState = State.Idle
     playerGapStart = -1

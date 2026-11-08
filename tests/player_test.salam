@@ -15,9 +15,8 @@
 
 // Drives the controller end to end on miniaudio's null backend: rejected
 // commands, failure classification, position and duration, pause and resume,
-// volume, seek and the end of a track. The null backend is paced by the wall
-// clock, so the only waits are bounded polls (a few seconds at most each) on
-// frame counters, and no assertion needs an exact time.
+// volume, seek and the end of a track. Tests pump a bounded number of frames
+// and yield only when the decoder ring is empty.
 
 import fs.file
 import os
@@ -67,10 +66,14 @@ func absDiff(a: i64, b: i64): i64:
     ret b - a
 end
 
+func streamDrained(): bool:
+    status := audio.ReadStatus()
+    ret status.atEnd and status.fillLevel == 0
+end
+
 func main:
     // A fresh player: idle, full volume, no position, no duration.
     player.InitManual()
-    clock := support.FakeClock {}
     inState("idle")
     testing.AssertEqInt(player.GetVolume(), 100)
     testing.AssertEqInt64(player.PositionMs(), -1)
@@ -142,7 +145,6 @@ func main:
     inState("playing")
     support.PumpFrames(8192)
     testing.AssertTrue(player.PositionMs() > held)
-    testing.AssertTrue(player.PositionMs() >= held)
     testing.AssertTrue(player.Pause())
     testing.AssertTrue(player.Resume())
     inState("playing")
@@ -153,7 +155,7 @@ func main:
     inState("playing")
     testing.AssertTrue(player.Seek(1))
     inState("playing")
-    support.PumpUntilSeek(32768)
+    support.PumpUntil(32768, (): ret audio.DecoderSeekPending() == false end)
     testing.AssertFalse(audio.DecoderSeekPending())
     support.PumpFrames(1)
     testing.AssertTrue(absDiff(player.PositionMs(), 1000) <= bufferMs)
@@ -182,10 +184,10 @@ func main:
     // and then fails inside the decoder.
     testing.AssertTrue(player.Play("fixtures/tone.ogg"))
     testing.AssertTrue(player.Seek(300))
-    support.PumpUntilSeek(32768)
+    support.PumpUntil(32768, (): ret audio.DecoderSeekPending() == false end)
     testing.AssertFalse(audio.DecoderSeekPending())
-    support.PumpUntilEnd(100000)
-    player.Tick(support.Now(clock))
+    support.PumpUntil(100000, (): ret streamDrained() end)
+    player.Tick(0)
     inState("error")
     testing.AssertEqStr(player.LastErrorText(), "could not decode this file")
     testing.AssertEqStr(player.CurrentPath(), "")
@@ -195,10 +197,10 @@ func main:
     // ended. Seeking to one second leaves half a second to play.
     testing.AssertTrue(player.Play("fixtures/tone.wav"))
     testing.AssertTrue(player.Seek(1))
-    support.PumpUntilSeek(32768)
+    support.PumpUntil(32768, (): ret audio.DecoderSeekPending() == false end)
     testing.AssertFalse(audio.DecoderSeekPending())
-    support.PumpUntilEnd(100000)
-    player.Tick(support.Now(clock))
+    support.PumpUntil(100000, (): ret streamDrained() end)
+    player.Tick(0)
     inState("ended")
     testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
     testing.AssertTrue(player.PositionMs() >= 1400 and player.PositionMs() <= 1500)
