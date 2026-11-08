@@ -30,6 +30,7 @@ mut playerState := State.Idle
 mut playerError := ErrorCode.None
 mut playerDetail := ""
 mut playerNullBackend := false
+mut playerManual := false
 mut playerVolume := 100
 
 @en "Init"
@@ -39,8 +40,17 @@ mut playerVolume := 100
 /// are left as they were.
 pub func Init(nullBackend: bool):
     playerNullBackend = nullBackend
+    playerManual = false
     playerVolume = 100
     Reset()
+end
+
+@en "InitManual"
+/// Initializes a null-backed player whose device callback stays stopped.
+/// Tests drive playback frames with `audio.FillFrames`.
+pub func InitManual():
+    Init(true)
+    playerManual = true
 end
 
 @en "Reset"
@@ -49,6 +59,7 @@ end
 /// Leaves the volume and the backend mode alone. Tests call it between cases.
 pub func Reset():
     audio.Close()
+    playerManual = false
     playerCurrent = ""
     playerState = State.Idle
     playerGapStart = -1

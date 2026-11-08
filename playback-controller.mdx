@@ -47,7 +47,7 @@ The controller exists and is fully tested headless, on miniaudio's null backend 
 | `Prev()` | `playing`, `paused`, `stopped`, `ended`, `error` | Plays the previous queue entry: `playing` or `error`. |
 | `SetVolume(percent)` / `GetVolume()` | every state except `loading` | State unchanged. |
 
-`Init(nullBackend)`, `Reset()` and `Tick(nowMs)` are lifecycle calls, not user commands, and the table does not apply to them. `Init` selects the real device or miniaudio's null device, sets the volume to 100 and calls `Reset`. `Reset` closes the engine, returns to `idle`, and clears the last error and the measured gap; it leaves the volume, the backend choice and the queue alone. `Tick` is described under [end of track](#end-of-track).
+`Init(nullBackend)`, `InitManual()`, `Reset()` and `Tick(nowMs)` are lifecycle calls, not user commands, and the table does not apply to them. `Init` selects the real device or miniaudio's null device, sets the volume to 100 and calls `Reset`. `InitManual()` selects the null device but leaves its callback stopped, so tests can drive frames themselves. `Reset` closes the engine, returns to `idle`, clears manual mode, the last error and the measured gap; it leaves the volume, the backend choice and the queue alone. `Tick` is described under [end of track](#end-of-track).
 
 - **`Next` and `Prev` are queue commands as well.** The table accepts them in the five states above and rejects them in `idle`. When the table accepts them, they are rejected with `BadArgument` and the detail "queue is empty", "end of queue" (`Next` on the last entry with repeat Off) or "start of queue" (`Prev` on entry 0 with repeat Off). The state is unchanged.
 - **`Toggle` in `stopped`, `idle` and `error` is rejected.** There is no paused track to resume. Use `Play`.
@@ -82,7 +82,7 @@ OGG has no duration because the engine reports its length as unknown by design; 
 - A negative value returns false with `BadArgument` and the detail "negative seek".
 - On a known length, a target past the end is clamped to the last frame.
 - If the engine refuses the seek, the call returns false with `DecodeFailure` and the detail "seek rejected". The state stays `playing`.
-- The seek is asynchronous, so `PositionMs()` settles a moment after the call. It then lands within one ring buffer of the target: 16384 frames, about 341 ms at 48 kHz. `tests/player_test.salam` seeks to 1 s, waits 50 ms after the engine reports the seek done, and asserts the position is within 341 ms of 1000 ms.
+- The seek is asynchronous, so `PositionMs()` settles after the decoder handles the request. It then lands within one ring buffer of the target: 16384 frames, about 341 ms at 48 kHz. `tests/player_test.salam` pumps the device until the seek completes, then asserts the position is within 341 ms of 1000 ms.
 
 ## Queue
 
@@ -108,7 +108,7 @@ The queue is a list of path strings in the order they were added. The path is th
 
 ## End of track
 
-`Tick(nowMs)` is the only call that notices a track ending. The caller runs it regularly from its event loop and passes a monotonic clock reading in milliseconds; production would pass `time.MonoMillis()` and tests pass a number. `Tick` does nothing unless the state is `playing`. In order, it:
+`Tick(nowMs)` is the only call that notices a track ending. The caller runs it regularly from its event loop and passes a monotonic clock reading in milliseconds; production passes `time.MonoMillis()`, and tests pass values from `support.FakeClock`. `Tick` does nothing unless the state is `playing`. In order, it:
 
 1. closes a pending gap measurement, if the next track has played its first frame;
 2. moves to `error` with `DecodeFailure` if the engine counted a decode error since the track started, stopping the device and closing the file;
@@ -194,7 +194,7 @@ The codec check is the extension, and only after the engine has refused the file
 
 ## Verification
 
-The controller is tested without audio hardware: every test calls `player.Init(true)`, which selects miniaudio's null backend, and passes its own number to `Tick`.
+The controller tests run without audio hardware or callback timing. They call `player.InitManual()`, which selects miniaudio's null backend and arms the device without starting its callback. `tests/support.salam` pumps frames into `audio.FillFrames` and supplies a fake clock to `Tick`. `engine_test` keeps one null-backend callback leg to verify the callback wiring.
 
 ```sh
 make test
