@@ -14,8 +14,7 @@
 # Env:   SALAM=path/to/salam          (default: salam on PATH)
 #        TEST_TIMEOUT=seconds          (default: 30; bound on each test run)
 #
-# Goldens are byte-exact and there is no update flag. To add an assertion, edit
-# the test, run it, and update the .out by hand. `make test` only reads tests/.
+# Goldens are byte-exact. `UPDATE=1` opts into rewriting them; CI refuses it.
 
 set -u
 
@@ -38,6 +37,14 @@ XDG_DATA_HOME="$OUT/xdg-data"
 XDG_CACHE_HOME="$OUT/xdg-cache"
 XDG_STATE_HOME="$OUT/xdg-state"
 export HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
+TERM=xterm-256color
+export TERM
+unset NO_COLOR COLORTERM CLICOLOR_FORCE
+
+if [ "${UPDATE:-}" = 1 ] && [ "${CI+x}" = x ]; then
+    echo "tests: UPDATE=1 is disabled in CI" >&2
+    exit 1
+fi
 
 if [ ! -x "$BIN" ]; then
     echo "tests: $BIN is missing; run 'make build' first" >&2
@@ -106,6 +113,14 @@ for name in "$@"; do
     elif [ "$code" -ne 0 ]; then
         echo "FAIL $name (exit $code)"
         fail=$((fail + 1))
+    elif [ "${UPDATE:-}" = 1 ]; then
+        if cp "$got" "$want"; then
+            echo "updated $name"
+            pass=$((pass + 1))
+        else
+            echo "FAIL $name (cannot update $name.out)"
+            fail=$((fail + 1))
+        fi
     elif ! diff -u "$want" "$got"; then
         echo "FAIL $name (output differs from $name.out)"
         fail=$((fail + 1))
