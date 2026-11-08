@@ -30,7 +30,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help deps build run test check fmt fmt-check header-check clean docs docs-check docs-format-check soak
+.PHONY: help deps build run test check fmt fmt-check header-check clean docs docs-check docs-format-check soak bench
 
 help:
 	@echo "make deps      fetch the packages salam.lock pins"
@@ -46,6 +46,7 @@ help:
 	@echo "make docs-check validate docs.json and check internal links and anchors"
 	@echo "make docs-format-check fail if mint format would rewrite a page (stage edits first)"
 	@echo "make soak      one hour of frames through the engine on a virtual clock (opt-in, not in test or CI)"
+	@echo "make bench     record startup, scan and frame measurements (opt-in, not in test or CI)"
 	@echo "Salam $(SALAM_VERSION)"
 
 # `salam build` never downloads, so the committed lock alone leaves a fresh
@@ -137,3 +138,6 @@ $(LIBRARY_OBJ): $(LIBRARY_DIR)/library_shim.c $(LIBRARY_DIR)/library_shim.h
 
 soak: build
 	sh tests/soak.sh
+
+bench: build
+	sh tests/bench.sh

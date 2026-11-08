@@ -1,0 +1,2 @@
+{"schema":1,"date":"2026-11-08T02:14:49Z","host":"MacBook-Air.local","os":"Darwin","arch":"arm64","salam":"0.5.9","basalam":"v0.3.3","startup_us":378,"frame_us_200x60":172,"scan_tracks_per_s":1352,"scan_tracks":1000,"frames":200,"startup_samples":12}
+{"schema":1,"date":"2026-11-08T02:15:21Z","host":"MacBook-Air.local","os":"Darwin","arch":"arm64","salam":"0.5.9","basalam":"v0.3.3","startup_us":353,"frame_us_200x60":203,"scan_tracks_per_s":1313,"scan_tracks":1000,"frames":200,"startup_samples":12}
