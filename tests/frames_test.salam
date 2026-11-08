@@ -21,9 +21,12 @@
 // included, so a clipped hint cannot pass.
 
 import testing
+import str
+import term
 import "github.com/curedbylethe/basalam/basalam"
 
 include "../ui/ui.salam"
+include "support.salam"
 
 func assert_row(buf: basalam.Buffer, y: int, want: str):
     testing.AssertEqStr(buf.row_text(y), want)
@@ -118,10 +121,33 @@ func test_frame_at_200x60():
     )
 end
 
+func test_frame_snapshots():
+    mut shell := ui.NewShell(80, 24)
+    defer shell.Close()
+    println "frame: root 80x24"
+    println support.FrameText(shell.screen)
+    println ""
+
+    _ := shell.screen.focus_next()
+    _ := shell.screen.focus_next()
+    println "frame: focus 80x24"
+    focus := support.FrameText(shell.screen)
+    println focus
+    println ""
+    testing.AssertTrue(str.Contains(shell.screen.buffer.diff(), term.Sgr(term.StyleReverse)))
+
+    large := ui.NewShell(200, 60)
+    defer large.Close()
+    println "frame: root 200x60"
+    println support.FrameText(large.screen)
+    println ""
+end
+
 func main(): int:
     test_frame_at_40x12()
     test_frame_at_80x24()
     test_frame_at_100x30()
     test_frame_at_200x60()
+    test_frame_snapshots()
     ret testing.Summary()
 end

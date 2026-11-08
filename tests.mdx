@@ -29,7 +29,7 @@ For each test program, `tests/run.sh`:
 
 The harness needs `build/mizrab` and stops if it is missing, which is why `make test` builds first. Calling the harness directly needs a prior `make build`.
 
-Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` variables at directories under `build/tests/`, so a test that needs a config file writes one there and never in the real home.
+Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` variables at directories under `build/tests/`, so a test that needs a config file writes one there and never in the real home. It pins `TERM=xterm-256color` and clears `NO_COLOR`, `COLORTERM` and `CLICOLOR_FORCE`, so headless frame snapshots use the same color tier on macOS and Ubuntu.
 
 ## The test programs
 
@@ -52,7 +52,7 @@ Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` 
 | `config_test` | the config reader: the shipped sample loading to the defaults, both keys, every rejection with its line number, a duplicate key, a missing file, and the precedence defaults \< file \< flag |
 | `keymap_test` | the keymap on a headless screen: the preset directions and `/`, `Tab` and the arrows, and the keys mizrab binds itself, with no terminal |
 | `library_view_test` | the library view headless: the index-to-row conversion and its order, the Unicode-folded filter over artist, title and album, the cursor clamp, the playing-row lookup, the two duration formats and the change flag |
-| `frames_test` | headless frame snapshots of the shell at 40 × 12, 80 × 24 and two large sizes: the 40 × 12 frame asserted whole, footer row included |
+| `frames_test` | full text snapshots of the root at 80 × 24, the focused screen at 80 × 24, and the root at 200 × 60; selected rows also check 40 × 12 and 100 × 30 |
 | `playlist_test` | the playlist panel headless: the cursor and playing marker columns, the long-title cut, the position run and thumb, both empty states, the stale-boxed-copy guard and the row-bounded render of 1,000 rows |
 | `now_playing_test` | the now-playing panel and the status segment headless: exact clock and bar run lengths, `--:--` with no bar, the 40 × 12 drop ladder and the 3-cell status slot, the album line and the focused status run |
 | `prompt_test` | the footer prompt headless: live filtering with the count, `q` staying in the prompt, Esc restoring the query and the playlist focus, Enter reporting one `SearchAccepted`, and the 40 × 12 keys slot |
@@ -107,4 +107,4 @@ With no names, the harness runs every `tests/*_test.salam`. A name narrows the g
 3. When the output is what you expect, save it verbatim as `tests/<something>_test.out`.
 4. Run `make test` to confirm the whole suite and the smoke checks pass.
 
-Goldens are byte-exact and there is no update flag: the `.out` file is edited by hand. `make test` and the harness only read `tests/`; neither rewrites a golden.
+Goldens are byte-exact. Set `UPDATE=1` to rewrite `.out` files from passing test output, for example `UPDATE=1 sh tests/run.sh frames_test`. The runner rejects update mode when `CI` is set. `make test` does not set `UPDATE`, so it only reads `tests/`.
