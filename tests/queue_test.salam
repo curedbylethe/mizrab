@@ -20,7 +20,6 @@
 // on the engine's frame counters, and the longest is the half second left of a
 // track after a seek to one second.
 
-import sync
 import testing
 
 link static "../build/miniaudio.o"
@@ -34,6 +33,7 @@ end
 
 include "../audio/audio.salam"
 include "../player/player.salam"
+include "support.salam"
 
 wav := "fixtures/tone.wav"
 flac := "fixtures/tone.flac"
@@ -55,7 +55,7 @@ end
 
 // Back to an idle player with an empty queue, repeat off and shuffle off.
 func fresh():
-    player.Reset()
+    player.InitManual()
     player.QueueClear()
     player.SetRepeat(player.RepeatMode.Off)
     player.SetShuffle(false)
@@ -78,11 +78,8 @@ end
 // has drained: the next Tick is then the one that sees the end.
 func playOut():
     testing.AssertTrue(player.Seek(1))
-    mut n := 0
-    until draining() and n < 4000:
-        sync.SleepMs(1)
-        n = n + 1
-    end
+    support.PumpUntilSeek(16384)
+    support.PumpUntilEnd(30000)
     testing.AssertFalse(draining())
 end
 
@@ -90,16 +87,13 @@ end
 // the ones it had already played when this was called.
 func firstFrame():
     seen := audio.ReadStatus().framesPlayed
-    mut n := 0
-    until audio.ReadStatus().framesPlayed == seen and n < 3000:
-        sync.SleepMs(1)
-        n = n + 1
-    end
+    support.PumpFrames(1)
     testing.AssertTrue(audio.ReadStatus().framesPlayed > seen)
 end
 
 func main:
-    player.Init(true)
+    player.InitManual()
+    clock := support.FakeClock {}
     testing.AssertEqInt64(player.LastGapMs(), -1)
     testing.AssertEqInt(player.QueueLen(), 0)
     testing.AssertEqInt(player.QueueIndex(), 0)
@@ -232,23 +226,30 @@ func main:
     player.SetRepeat(player.RepeatMode.One)
     testing.AssertTrue(player.Play(wav))
     playOut()
-    player.Tick(1000)
+    clock.now = 0
+    support.Advance(clock, 1000)
+    player.Tick(support.Now(clock))
     inState("playing")
     testing.AssertEqStr(player.CurrentPath(), wav)
     testing.AssertEqInt64(player.LastGapMs(), -1)
     firstFrame()
-    player.Tick(1350)
+    support.Advance(clock, 350)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 350)
-    player.Tick(9000)
+    support.Advance(clock, 7650)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 350)
 
     // A pause drops a gap still in progress, so the pause is not measured.
     playOut()
-    player.Tick(2000)
+    clock.now = 0
+    support.Advance(clock, 2000)
+    player.Tick(support.Now(clock))
     testing.AssertTrue(player.Pause())
     testing.AssertTrue(player.Resume())
     firstFrame()
-    player.Tick(9000)
+    support.Advance(clock, 7000)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 350)
 
     // Repeat all: the last track's end wraps to the first.
@@ -259,12 +260,15 @@ func main:
     testing.AssertTrue(player.Play(flac))
     testing.AssertEqInt(player.QueueIndex(), 1)
     playOut()
-    player.Tick(5000)
+    clock.now = 0
+    support.Advance(clock, 5000)
+    player.Tick(support.Now(clock))
     inState("playing")
     testing.AssertEqStr(player.CurrentPath(), wav)
     testing.AssertEqInt(player.QueueIndex(), 0)
     firstFrame()
-    player.Tick(5100)
+    support.Advance(clock, 100)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 100)
 
     // Repeat off: the first end advances, the second ends playback and keeps
@@ -274,14 +278,18 @@ func main:
     player.QueueAdd(flac)
     testing.AssertTrue(player.Play(wav))
     playOut()
-    player.Tick(100)
+    clock.now = 0
+    support.Advance(clock, 100)
+    player.Tick(support.Now(clock))
     inState("playing")
     testing.AssertEqStr(player.CurrentPath(), flac)
     firstFrame()
-    player.Tick(450)
+    support.Advance(clock, 350)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 350)
     playOut()
-    player.Tick(900)
+    support.Advance(clock, 450)
+    player.Tick(support.Now(clock))
     inState("ended")
     testing.AssertEqInt64(player.LastGapMs(), 350)
     testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
@@ -296,7 +304,9 @@ func main:
     player.QueueAdd("fixtures/missing.wav")
     testing.AssertTrue(player.Play(wav))
     playOut()
-    player.Tick(100)
+    clock.now = 0
+    support.Advance(clock, 100)
+    player.Tick(support.Now(clock))
     inState("error")
     testing.AssertEqStr(player.LastErrorText(), "file not found")
     testing.AssertEqInt64(player.LastGapMs(), -1)
@@ -308,9 +318,12 @@ func main:
     player.SetRepeat(player.RepeatMode.One)
     testing.AssertTrue(player.Play(wav))
     playOut()
-    player.Tick(10)
+    clock.now = 0
+    support.Advance(clock, 10)
+    player.Tick(support.Now(clock))
     firstFrame()
-    player.Tick(20)
+    support.Advance(clock, 10)
+    player.Tick(support.Now(clock))
     testing.AssertEqInt64(player.LastGapMs(), 10)
     player.Reset()
     testing.AssertEqInt64(player.LastGapMs(), -1)
