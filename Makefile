@@ -30,7 +30,7 @@ ifeq ($(shell uname -s),Darwin)
 export MACOSX_DEPLOYMENT_TARGET ?= $(shell sw_vers -productVersion)
 endif
 
-.PHONY: help deps build run test check fmt fmt-check header-check clean docs docs-check docs-format-check soak bench
+.PHONY: help deps build run test check fmt fmt-check header-check coverage-check clean docs docs-check docs-format-check soak bench
 
 help:
 	@echo "make deps      fetch the packages salam.lock pins"
@@ -40,7 +40,8 @@ help:
 	@echo "make fmt       format all Salam sources in place"
 	@echo "make fmt-check fail if any Salam source would be rewritten"
 	@echo "make header-check fail if a Salam source lacks the licence header"
-	@echo "make check     run fmt-check, build and test in order: the tree-green gate"
+	@echo "make coverage-check regenerate and compare the module-to-test ledger"
+	@echo "make check     run fmt-check, coverage-check, build and test: the tree-green gate"
 	@echo "make clean     remove build output"
 	@echo "make docs      serve the site locally with mint $(MINT_VERSION) (pinned in .mint-version)"
 	@echo "make docs-check validate docs.json and check internal links and anchors"
@@ -106,7 +107,13 @@ header-check:
 # reported before the compile, then test (which depends on build).
 check:
 	$(MAKE) fmt-check
+	$(MAKE) coverage-check
 	$(MAKE) test
+
+coverage-check:
+	@mkdir -p $(BUILD)
+	@sh tests/coverage.sh > $(BUILD)/coverage.out
+	@diff -u tests/coverage.out $(BUILD)/coverage.out
 
 docs:
 	$(MINT) dev
