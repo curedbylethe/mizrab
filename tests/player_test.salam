@@ -21,9 +21,7 @@
 
 import fs.file
 import os
-import sync
 import testing
-import time
 
 link static "../build/miniaudio.o"
 link static "../build/ma_shim.o"
@@ -36,6 +34,7 @@ end
 
 include "../audio/audio.salam"
 include "../player/player.salam"
+include "support.salam"
 
 // One buffer: the engine's ring, 16384 frames at 48 kHz, in milliseconds.
 bufferMs := 341 as i64
@@ -61,30 +60,6 @@ func failedPlay(path: str, text: str):
     testing.AssertEqStr(player.CurrentPath(), "")
 end
 
-// Waits up to three seconds for the position to pass `ms`.
-func waitPast(ms: i64):
-    mut n := 0
-    until player.PositionMs() <= ms and n < 3000:
-        sync.SleepMs(1)
-        n = n + 1
-    end
-    testing.AssertTrue(player.PositionMs() > ms)
-end
-
-// Waits up to three seconds for the seek in flight to land.
-func waitSeek():
-    mut n := 0
-    until audio.DecoderSeekPending() and n < 3000:
-        sync.SleepMs(1)
-        n = n + 1
-    end
-    testing.AssertFalse(audio.DecoderSeekPending())
-end
-
-func playing(): bool:
-    ret player.CurrentState() == player.State.Playing
-end
-
 func absDiff(a: i64, b: i64): i64:
     if a > b:
         ret a - b
@@ -94,7 +69,8 @@ end
 
 func main:
     // A fresh player: idle, full volume, no position, no duration.
-    player.Init(true)
+    player.InitManual()
+    clock := support.FakeClock {}
     inState("idle")
     testing.AssertEqInt(player.GetVolume(), 100)
     testing.AssertEqInt64(player.PositionMs(), -1)
@@ -152,19 +128,20 @@ func main:
 
     // Pause and resume through toggle: the position holds while paused and
     // never goes backwards.
-    waitPast(100)
+    support.PumpFrames(8192)
     before := player.PositionMs()
+    testing.AssertTrue(before > 100)
     testing.AssertTrue(player.Toggle())
     inState("paused")
     held := player.PositionMs()
     testing.AssertTrue(held >= before)
     refused(player.Pause(), "paused")
     refused(player.Seek(1), "paused")
-    sync.SleepMs(60)
     testing.AssertEqInt64(player.PositionMs(), held)
     testing.AssertTrue(player.Toggle())
     inState("playing")
-    waitPast(held)
+    support.PumpFrames(8192)
+    testing.AssertTrue(player.PositionMs() > held)
     testing.AssertTrue(player.PositionMs() >= held)
     testing.AssertTrue(player.Pause())
     testing.AssertTrue(player.Resume())
@@ -176,8 +153,9 @@ func main:
     inState("playing")
     testing.AssertTrue(player.Seek(1))
     inState("playing")
-    waitSeek()
-    sync.SleepMs(50)
+    support.PumpUntilSeek(32768)
+    testing.AssertFalse(audio.DecoderSeekPending())
+    support.PumpFrames(1)
     testing.AssertTrue(absDiff(player.PositionMs(), 1000) <= bufferMs)
     testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
 
@@ -204,11 +182,10 @@ func main:
     // and then fails inside the decoder.
     testing.AssertTrue(player.Play("fixtures/tone.ogg"))
     testing.AssertTrue(player.Seek(300))
-    mut deadline := time.MonoMillis() + 3000
-    until playing() and time.MonoMillis() < deadline:
-        sync.SleepMs(5)
-        player.Tick(time.MonoMillis())
-    end
+    support.PumpUntilSeek(32768)
+    testing.AssertFalse(audio.DecoderSeekPending())
+    support.PumpUntilEnd(100000)
+    player.Tick(support.Now(clock))
     inState("error")
     testing.AssertEqStr(player.LastErrorText(), "could not decode this file")
     testing.AssertEqStr(player.CurrentPath(), "")
@@ -218,11 +195,10 @@ func main:
     // ended. Seeking to one second leaves half a second to play.
     testing.AssertTrue(player.Play("fixtures/tone.wav"))
     testing.AssertTrue(player.Seek(1))
-    deadline = time.MonoMillis() + 3000
-    until playing() and time.MonoMillis() < deadline:
-        sync.SleepMs(5)
-        player.Tick(time.MonoMillis())
-    end
+    support.PumpUntilSeek(32768)
+    testing.AssertFalse(audio.DecoderSeekPending())
+    support.PumpUntilEnd(100000)
+    player.Tick(support.Now(clock))
     inState("ended")
     testing.AssertEqInt64(audio.ReadStatus().decodeErrors, 0)
     testing.AssertTrue(player.PositionMs() >= 1400 and player.PositionMs() <= 1500)
