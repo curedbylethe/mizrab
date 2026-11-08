@@ -17,7 +17,8 @@ Every task is a `make` target. `make help` prints the short list and the Salam v
 
 | Target | Runs | Purpose |
 | --- | --- | --- |
-| `make check` | `make fmt-check`, then `make test` (which runs `make build`) | the tree-green gate: formatting, then build and test |
+| `make check` | `make fmt-check`, `make coverage-check`, then `make test` (which runs `make build`) | the tree-green gate: formatting, ledger, build and test |
+| `make coverage-check` | regenerate `tests/coverage.out` and compare it with the committed ledger | fail when tracked Salam modules or test includes change without updating the ledger |
 
 `make check` is the one command every contributor and CI job runs; the three targets it calls are below, for when one step fails. CI's `check` job calls it on Ubuntu and macOS.
 
