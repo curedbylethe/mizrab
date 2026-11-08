@@ -93,8 +93,14 @@ end
 
 // Starts the device. A failed start is DeviceLost with the device's own words.
 func startDevice(): bool:
-    if audio.Start(playerNullBackend):
-        ret true
+    if playerManual:
+        if audio.Arm(playerNullBackend):
+            ret true
+        end
+    else:
+        if audio.Start(playerNullBackend):
+            ret true
+        end
     end
     setError(ErrorCode.DeviceLost, audio.DevLastError())
     ret false
