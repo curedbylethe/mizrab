@@ -108,3 +108,5 @@ With no names, the harness runs every `tests/*_test.salam`. A name narrows the g
 4. Run `make test` to confirm the whole suite and the smoke checks pass.
 
 Goldens are byte-exact. Set `UPDATE=1` to rewrite `.out` files from passing test output, for example `UPDATE=1 sh tests/run.sh frames_test`. The runner rejects update mode when `CI` is set. `make test` does not set `UPDATE`, so it only reads `tests/`.
+
+`make bench` records startup to first frame, scan throughput and median frame time at 200 × 60 in `bench/results.jsonl`. It is a manual measurement, not a test or CI gate; compare records only across matching hosts and operating systems.

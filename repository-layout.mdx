@@ -20,6 +20,7 @@ mizrab is one Salam program plus the audio engine and the vendored C it drives, 
 | `config/` | Where mizrab keeps its files: the Salam package `config` (`config.salam` entry file and its XDG directory resolver, `settings.salam` with the INI-subset reader, `Settings`, `Resolve` and `Describe`) and `config.sample.ini`, the commented sample a test loads. See [configuration](/configuration) |
 | `ui/` | The terminal interface: the Salam package `ui` (`ui.salam` entry file, `keymap.salam` with `Command` and `Vim`, `shell.salam` with the screen and its tree, `loop.salam` with the event loop, `playlist.salam` and `now_playing.salam` with the two body panels, `status.salam` and `mode.salam` with the footer segments and the prompt, `command.salam` with the command parser and its completions, `overlay.salam` with the help and quit modals, `library_view.salam` with the rows, filter and cursor, `text.salam` with the one truncation rule, `terminal.salam` with the restore sequence and signal guard, `instance.salam` with the single-instance lock). See [the app shell](/app-shell) |
 | `tests/` | The `*_test.salam` programs with their `.out` goldens (`cli`, `ring`, `decode`, `engine`, `state`, `player`, `queue`, `library_shim`, `walk`, `tags`, `ogg`, `index`, `rescan`, `paths`, `config`, `keymap`, `shell`, `loop`, `terminal`, `instance`, `unicode`, `library_view`, `frames`, `playlist`, `now_playing`, `prompt`, `command`, `overlay`, `frame_budget`), the `run.sh` harness, the `soak.salam` / `soak.sh` pair behind `make soak`, the `gap.salam` / `gap.sh` pair that measures the inter-track gap by hand, the `shell-measure.sh` and `frame-measure.sh` pty harnesses with their `probe/` programs, `unicode_probe.salam`, which prints the table `unicode_test` asserts, and `fixtures/`, the audio files with their provenance: one small tone per decoder format plus the tagged and packet-split files the scanner tests read |
+| `bench/` | Append-only `results.jsonl` history from `make bench`; see [benchmark fields](/repository-layout#benchmarks) |
 | `salam.toml`, `salam.lock` | The Salam manifest and its lock: the compiler floor, and the three pinned packages (`audio.flac`, `audio.tag`, basalam) with their commits and sha256 sums |
 | `index.mdx` | Site page: introduction, status and what mizrab is built on |
 | `install.mdx` | Site page: prerequisites, clone, build and run |
@@ -53,3 +54,7 @@ The CI legs run the engine test on miniaudio's null backend as part of `make tes
 The documentation site lives at the repository root, not in a `docs/` directory: Mintlify resolves page paths against the directory that holds `docs.json`, so a page at `docs/index` would serve `/docs/...` and leave the site root empty.
 
 `build/` and `.salam-build/` appear after a build and are ignored by git. `make clean` removes both.
+
+## Benchmarks
+
+`make bench` appends host-specific startup, scan and frame-time measurements to `bench/results.jsonl`. The file records values without asserting thresholds; the `bench/README.md` file defines the record fields.
