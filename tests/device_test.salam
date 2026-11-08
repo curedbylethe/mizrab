@@ -1,0 +1,61 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Covers the device's public accessors and lifecycle against miniaudio's null
+// backend. Start is observed immediately; this test never waits for its clock.
+
+import testing
+
+link static "../build/miniaudio.o"
+link static "../build/ma_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../audio/audio.salam"
+
+func main:
+    testing.AssertTrue(audio.Open("fixtures/tone.wav"))
+    testing.AssertTrue(audio.Arm(true))
+    testing.AssertFalse(audio.DevIsRunning())
+    testing.AssertEqStr(audio.DevLastError(), "")
+    testing.AssertEqInt(audio.DevSampleRate(), 48000)
+    testing.AssertEqInt(audio.DevChannels(), 2)
+
+    backend := audio.DevBackendName()
+    testing.AssertTrue(len(backend) > 0)
+    println "backend: " + backend
+
+    testing.AssertTrue(audio.DevStart())
+    testing.AssertTrue(audio.DevIsRunning())
+    testing.AssertTrue(audio.DevStop())
+    testing.AssertFalse(audio.DevIsRunning())
+
+    testing.AssertTrue(audio.DevSetVolume(40))
+    testing.AssertEqInt(audio.DevGetVolume(), 40)
+    testing.AssertTrue(audio.DevSetVolume(150))
+    testing.AssertEqInt(audio.DevGetVolume(), 100)
+    testing.AssertTrue(audio.DevSetVolume(-5))
+    testing.AssertEqInt(audio.DevGetVolume(), 0)
+
+    audio.Stop()
+    audio.Close()
+    testing.AssertEqInt(audio.DevGetVolume(), -1)
+    testing.AssertFalse(audio.DevIsRunning())
+    ret testing.Summary()
+end
