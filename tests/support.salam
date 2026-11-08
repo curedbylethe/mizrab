@@ -1,0 +1,34 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+package support
+
+import "github.com/curedbylethe/basalam/basalam"
+
+@en "FrameText"
+/// Draws a headless screen and returns its rows as newline-separated text.
+pub func FrameText(screen: basalam.Screen): str:
+    screen.present()
+    mut text := ""
+    mut y := 0
+    until y < screen.buffer.height:
+        if y > 0:
+            text = text + "\n"
+        end
+        text = text + screen.buffer.row_text(y)
+        y = y + 1
+    end
+    ret text
+end
