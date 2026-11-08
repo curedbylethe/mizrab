@@ -35,13 +35,13 @@ pub func PumpFrames(frames: int):
     mem.Free(buf as void*)
 end
 
-@en "PumpUntilEnd"
-/// Pumps up to `maxFrames` while the decoder reaches end and the ring drains.
-pub func PumpUntilEnd(maxFrames: int):
+@en "PumpUntil"
+/// Pumps up to `maxFrames` until `done` reports that playback has settled.
+pub func PumpUntil(maxFrames: int, done: func () bool):
     buf := mem.AllocateZeroed((512 * 2 * 4) as u64) as f32*
     mut pumped := 0
     mut status := audio.ReadStatus()
-    until (status.atEnd == false or status.fillLevel > 0) and pumped < maxFrames:
+    until done() == false and pumped < maxFrames:
         if status.fillLevel == 0 and status.atEnd == false:
             sync.SleepMs(1)
         end
@@ -54,40 +54,6 @@ pub func PumpUntilEnd(maxFrames: int):
         status = audio.ReadStatus()
     end
     mem.Free(buf as void*)
-end
-
-@en "PumpUntilSeek"
-/// Pumps until the decoder completes a queued seek or the frame budget ends.
-pub func PumpUntilSeek(maxFrames: int):
-    buf := mem.AllocateZeroed((512 * 2 * 4) as u64) as f32*
-    mut pumped := 0
-    mut status := audio.ReadStatus()
-    until audio.DecoderSeekPending() and pumped < maxFrames:
-        if status.fillLevel == 0 and status.atEnd == false:
-            sync.SleepMs(1)
-        end
-        mut frames := 512
-        if maxFrames - pumped < frames:
-            frames = maxFrames - pumped
-        end
-        audio.FillFrames(buf, frames as i64)
-        pumped = pumped + frames
-        status = audio.ReadStatus()
-    end
-    mem.Free(buf as void*)
-end
-
-@en "Now"
-/// Reads a fake clock without advancing it.
-pub func Now(clock: FakeClock): i64:
-    ret clock.now
-end
-
-@en "Advance"
-/// Advances a fake clock by `ms` and returns its new value.
-pub func Advance(clock &: FakeClock, ms: i64): i64:
-    clock.now = clock.now + ms
-    ret clock.now
 end
 
 @en "FrameText"

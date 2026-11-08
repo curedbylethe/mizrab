@@ -52,7 +52,7 @@ i=1
 while [ "$i" -le 12 ]; do
     rm -f "$RESULT"
     if ! script -q /dev/null "$PROBE" "$RESULT" >/dev/null; then
-        echo "bench: startup probe failed on run $i; it needs a pty" >&2
+        echo "bench: startup probe failed on run $i; this uses macOS script syntax, while Linux script uses -c" >&2
         exit 1
     fi
     if [ ! -s "$RESULT" ]; then

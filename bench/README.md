@@ -4,6 +4,7 @@ Run `make bench` to append one JSON record to `bench/results.jsonl`. The run
 measures startup to first frame under a pseudo-terminal, scan throughput over
 1,000 fixture tracks, and median frame time at 200 × 60. It records results;
 it does not assert thresholds or run as part of `make check` or CI.
+The startup runner currently supports macOS only; Linux `script` uses `-c`.
 
 Each line is one run. The file is append-only: keep older records unchanged.
 Compare runs from the same host and operating system; timing depends on the

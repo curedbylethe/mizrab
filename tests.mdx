@@ -35,7 +35,7 @@ Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` 
 
 `tests/coverage.out` is the generated module-to-test ledger. `tests/coverage.sh` lists every tracked Salam source and the tests that include it; `make coverage-check` fails when the ledger drifts. Run `sh tests/coverage.sh > tests/coverage.out` to refresh it.
 
-The ledger answers covered or not covered at module level. The list below records partial or unreachable behavior that include scanning cannot identify.
+The ledger reports package-level inclusion: when a test includes a package entry, its leaf files appear covered even without direct file-level tests. The list below records partial or unreachable behavior that include scanning cannot identify.
 
 ### Untested and why
 
