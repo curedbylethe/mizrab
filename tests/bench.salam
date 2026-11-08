@@ -1,0 +1,105 @@
+/*
+ * mizrab - a terminal music player built on basalam (2026)
+ *
+ *   +---------------+
+ *   |  M I Z R A B  |
+ *   +---------------+
+ *
+ * Built on the Salam standard library and basalam
+ * Salam: https://github.com/SalamLang/Salam
+ *
+ * Repository: https://github.com/curedbylethe/mizrab
+ * License: GPL-3.0-or-later
+ *
+ */
+
+// Manual benchmark consumer; tests/run.sh only discovers *_test.salam.
+
+import conv
+import mem
+import os
+import sort
+import time
+
+link static "../build/library_shim.o"
+
+if SALAM_OS_UNIX:
+    link dynamic "m"
+    link dynamic "dl"
+    link dynamic "pthread"
+end
+
+include "../library/library.salam"
+include "../ui/ui.salam"
+
+func median(samples: Vector<i64>): i64:
+    sort.SortBy(samples, (a: i64, b: i64): ret a < b end)
+    ret samples.get(samples.len() / 2)
+end
+
+func benchFrames(): i64:
+    mut shell := ui.NewShell(200, 60)
+    defer shell.Close()
+
+    shell.screen.present()
+    first := shell.screen.buffer.diff()
+    if first == "":
+        mem.Free(first as void*)
+        ret 0
+    end
+    shell.screen.buffer.commit()
+    mem.Free(first as void*)
+
+    mut samples := Vector {} as Vector<i64>
+    defer samples.free()
+    repeat 5:
+        repeat 40:
+            shell.screen.dirty = true
+            t0 := time.MonoNanos()
+            shell.screen.present()
+            diff := shell.screen.buffer.diff()
+            shell.screen.buffer.commit()
+            t1 := time.MonoNanos()
+            mem.Free(diff as void*)
+            samples.push((t1 - t0) / 1000)
+        end
+    end
+    ret median(samples)
+end
+
+func benchScan(root: str, index: str): i64:
+    mut roots := Vector {} as Vector<str>
+    defer roots.free()
+    roots.push(root)
+    mut count := library.ScanCount {}
+    t0 := time.MonoNanos()
+    result := library.Scan(roots, index, count)
+    elapsed := time.MonoNanos() - t0
+    if result != 0 or count.total != 1000 or elapsed <= 0:
+        printerrln "bench: scan failed or found an unexpected track count"
+        ret 0
+    end
+    ret ((count.total as i64) * (1000000000 as i64)) / elapsed
+end
+
+func main(): int:
+    args := os.Args()
+    if args.len() != 3:
+        printerrln "usage: bench <library-root> <index-path>"
+        ret 2
+    end
+    frameUs := benchFrames()
+    if frameUs <= 0:
+        printerrln "bench: frame render produced no output"
+        ret 1
+    end
+    scanRate := benchScan(args.get(1), args.get(2))
+    if scanRate <= 0:
+        ret 1
+    end
+    println "frame_us_200x60=" + conv.FormatInt(frameUs)
+    println "frames=200"
+    println "scan_tracks_per_s=" + conv.FormatInt(scanRate)
+    println "scan_tracks=1000"
+    ret 0
+end
