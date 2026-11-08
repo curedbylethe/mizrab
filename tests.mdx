@@ -40,8 +40,8 @@ Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` 
 | `decode_test` | the decoder: one fixture per format (WAV, FLAC, MP3, OGG), the duration matrix, failed opens, the getters when no decoder is open, a stop and start that matches a straight decode frame for frame, a dead decoder restarted, and seeks (the audio after a seek, and a second request during the drain served once) |
 | `engine_test` | the whole [audio engine](/audio-engine) on miniaudio's null backend: all four formats, the underrun count, volume, seek, the status snapshot, `FillFrames` with no engine open or a bad argument, and `Stop` after `Arm` |
 | `state_test` | the [playback controller](/playback-controller)'s transition table: all 63 state and command pairs, the names and the error text |
-| `player_test` | the controller's commands on the null backend: rejected transitions, failure classification, position and duration, pause and resume, volume, the seek bound and the end of a track |
-| `queue_test` | the controller's queue: order and bounds, repeat modes, shuffle determinism, the end-of-track advance and the gap measured with a fake clock |
+| `player_test` | the controller's commands with a manually pumped null device: rejected transitions, failure classification, position and duration, pause and resume, volume, the seek bound and the end of a track |
+| `queue_test` | the controller's queue with a manually pumped null device: order and bounds, repeat modes, shuffle determinism, the end-of-track advance and the gap measured with a fake clock |
 | `library_shim_test` | the [library](/library) C shim: `lstat` on a file, a directory, a symlink and a missing path, and the binary-safe head read, checked against a hand-decoded FLAC STREAMINFO block |
 | `walk_test` | the library walk: the fixtures in sorted order, with the symlink and the non-audio file left out; dot-names, letter case, a symlinked directory and the 32-level depth limit on a tree built at run time |
 | `tags_test` | `ReadTrack`: the tagged MP3 and FLAC fixtures, an artist-only tag keeping a filename title, the untagged fallback, FLAC duration, the track ID and a JSON round trip |
@@ -65,7 +65,7 @@ Before the first binary invocation, `run.sh` points `HOME` and the four `XDG_*` 
 | `unicode_test` | the measured Unicode record: byte, codepoint, grapheme and `term.Width` numbers for a fixed corpus, and how titles sort |
 | `frame_budget_test` | the 200 × 60 frame budget guard: 50 forced full repaints with 1,000 tracks, the median under a 4 × 16 ms ceiling, and the playlist formatting 48 rows, never 1,000 |
 
-`decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The library tests link `build/library_shim.o`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
+`decode_test` and `engine_test` link `build/miniaudio.o` and `build/ma_shim.o`, which `make build` produces, and read the audio files in `tests/fixtures/`. The library tests link `build/library_shim.o`. The engine test needs no sound card and no ALSA configuration, so it runs on both CI legs. `player_test` and `queue_test` use `player.InitManual()` and `support.PumpFrames`/`support.PumpUntilEnd`; only the decoder thread runs, and tests own frame delivery and the `Tick` clock. `engine_test` retains its callback leg, which remains wall-clock paced. `tests/soak.sh` is not a test and `run.sh` never discovers it; `make soak` runs it (see [make targets](/make-targets)).
 
 `tests/gap.sh` is not a test either, and `run.sh` does not discover it. It is run by hand, after `make build`, to record the inter-track gap on the real audio backend; see [the playback controller](/playback-controller#the-inter-track-gap).
 
